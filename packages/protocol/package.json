@@ -1,0 +1,50 @@
+{
+    "name": "@timecat-js/protocol",
+    "version": "0.0.0",
+    "description": "TimeCat recording format (TCR): binary primitives, string tables and the chunk container",
+    "keywords": [
+        "recording",
+        "session-replay",
+        "tcr",
+        "timecat"
+    ],
+    "homepage": "https://github.com/h5box/TimeCat/tree/master/packages/protocol#readme",
+    "bugs": "https://github.com/h5box/TimeCat/issues",
+    "license": "GPL-3.0-or-later",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/h5box/TimeCat.git",
+        "directory": "packages/protocol"
+    },
+    "files": [
+        "dist"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "exports": {
+        ".": {
+            "@timecat-js/source": "./src/index.ts",
+            "default": "./dist/index.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "publishConfig": {
+        "exports": {
+            ".": "./dist/index.js",
+            "./package.json": "./package.json"
+        }
+    },
+    "scripts": {
+        "build": "tsdown",
+        "typecheck": "tsc -p .",
+        "prepack": "node -e \"require('node:fs').copyFileSync('../../LICENSE', 'LICENSE')\""
+    },
+    "devDependencies": {
+        "@arethetypeswrong/core": "catalog:",
+        "fast-check": "catalog:",
+        "publint": "catalog:",
+        "tsdown": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:"
+    }
+}

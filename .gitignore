@@ -1,0 +1,18 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+*.log
+.DS_Store
+.env
+.env.*
+
+# Vitest browser mode
+__screenshots__/
+.vitest-attachments/
+
+# Benchmark output
+apps/bench/results/
+
+# Copied from the repository root when packing
+packages/*/LICENSE

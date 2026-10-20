@@ -1,0 +1,39 @@
+{
+    "name": "timecat-monorepo",
+    "private": true,
+    "license": "GPL-3.0-or-later",
+    "type": "module",
+    "scripts": {
+        "build": "pnpm -r build",
+        "typecheck": "tsc -p . && pnpm -r typecheck",
+        "lint": "oxlint",
+        "format": "oxfmt",
+        "format:check": "oxfmt --check",
+        "test": "vitest run --project node",
+        "test:browser": "vitest run --project browser",
+        "size": "size-limit",
+        "knip": "knip",
+        "bench": "pnpm --filter @timecat-js/bench bench",
+        "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm knip && pnpm test && pnpm build && pnpm size",
+        "changeset": "changeset",
+        "release": "pnpm build && changeset publish"
+    },
+    "devDependencies": {
+        "@changesets/cli": "catalog:",
+        "@size-limit/preset-small-lib": "catalog:",
+        "@types/node": "catalog:",
+        "@vitest/browser-playwright": "catalog:",
+        "knip": "catalog:",
+        "oxfmt": "catalog:",
+        "oxlint": "catalog:",
+        "oxlint-tsgolint": "catalog:",
+        "playwright": "catalog:",
+        "size-limit": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:"
+    },
+    "engines": {
+        "node": ">=24.11"
+    },
+    "packageManager": "pnpm@12.14.0+sha512.c18ba6d87993d3d164cb5e8948f32b2c06ee854487e06cd8d86781342fb3e5bb4634367034711e86802baa9c37bea906ce1929ad08d70884c97d801df13389a6"
+}

@@ -1,0 +1,36 @@
+{
+    "$schema": "./node_modules/oxlint/configuration_schema.json",
+    "plugins": ["typescript", "unicorn", "oxc", "import", "promise", "vitest"],
+    "categories": {
+        "correctness": "error",
+        "suspicious": "warn",
+        "perf": "warn"
+    },
+    "options": {
+        "typeAware": true,
+        "denyWarnings": true,
+        "reportUnusedDisableDirectives": "warn"
+    },
+    "env": {
+        "builtin": true,
+        "browser": true
+    },
+    "rules": {
+        "vitest/expect-expect": ["error", { "assertFunctionNames": ["expect", "fc.assert"] }]
+    },
+    "overrides": [
+        {
+            "files": ["apps/bench/**", "*.config.ts"],
+            "env": {
+                "node": true
+            }
+        },
+        {
+            "files": ["apps/bench/**"],
+            "rules": {
+                "no-await-in-loop": "off"
+            }
+        }
+    ],
+    "ignorePatterns": ["**/dist/**", "rfcs/**"]
+}

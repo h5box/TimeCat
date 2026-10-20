@@ -1,0 +1,9 @@
+[
+    {
+        "name": "@timecat-js/protocol (everything)",
+        "path": "packages/protocol/dist/index.js",
+        "import": "*",
+        "gzip": true,
+        "limit": "3 kB"
+    }
+]

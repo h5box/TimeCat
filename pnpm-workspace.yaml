@@ -1,0 +1,21 @@
+packages:
+  - packages/*
+  - apps/*
+
+catalog:
+  '@arethetypeswrong/core': 0.18.5
+  '@changesets/cli': 3.0.3
+  '@size-limit/preset-small-lib': 14.2.0
+  '@types/node': 24.19.2
+  '@vitest/browser-playwright': 5.0.5
+  fast-check: 4.10.2
+  knip: 6.42.1
+  oxfmt: 0.74.0
+  oxlint: 1.89.0
+  oxlint-tsgolint: 7.0.2004
+  playwright: 1.64.1
+  publint: 0.3.25
+  size-limit: 14.2.0
+  tsdown: 0.23.1
+  typescript: 7.0.2
+  vitest: 5.0.5
