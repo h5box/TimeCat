@@ -1,0 +1,13 @@
+{
+    "private": true,
+    "name": "timecat-encoding-bench",
+    "description": "Spike benchmark for RFC 0001: wire encodings for session-replay data",
+    "type": "module",
+    "scripts": {
+        "bench": "node run.mjs"
+    },
+    "devDependencies": {
+        "msgpackr": "2.1.2",
+        "playwright-core": "1.56.1"
+    }
+}
