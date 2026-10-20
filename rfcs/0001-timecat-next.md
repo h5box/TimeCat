@@ -1,9 +1,9 @@
 # RFC 0001：TimeCat Next 架构与技术选型
 
-| 状态 | 草案，待确认 |
+| 状态 | 已采纳（2026-10-20），决策见第 10 节 |
 |---|---|
 | 日期 | 2026-10-20 |
-| 范围 | 从零重写录制 / 回放 SDK，并为服务端与 AI 能力预留接口 |
+| 范围 | 从零重写纯前端的录制 / 回放 SDK。服务端与 AI（第 4.4、5 节）暂缓，只在协议层预留接口 |
 
 > 文中的版本号和浏览器兼容数据都是 2026-10-20 实际查询的结果，来源是 npm registry、MDN browser-compat-data 8.1.6 和 web-features 3.43.0。性能数据来自附录 A 的实测。
 
@@ -319,19 +319,19 @@ apps/
 
 | 阶段 | 内容 |
 |---|---|
-| M0 地基 | monorepo、工具链、三浏览器 CI、基准框架（含 rrweb 对标）、TCR 格式规范 v0；换掉旧 `.gitignore`（旧规则忽略了 `docs`、`examples`、`test*` 这些常用名字） |
+| M0 地基（已完成） | monorepo、工具链、三浏览器 CI、基准框架（含 rrweb 对标）、TCR 格式规范 v0；换掉旧 `.gitignore`（旧规则忽略了 `docs`、`examples`、`test*` 这些常用名字）。产出见 [`packages/protocol`](../packages/protocol)、[`apps/bench`](../apps/bench)（含 rrweb 基线）、[RFC 0002](./0002-tcr-format.md) |
 | M1 录制核心 + 最小回放 | 分片快照、按帧合并的增量、输入（含脱敏）/ 指针 / 滚动 / 视口 / 导航；Worker 管线（编码、压缩、OPFS、导出）；player-core 的播放和 seek；保真测试套件 |
 | M2 平台覆盖与回放体验 | Shadow DOM、Constructable Stylesheets / CSSOM、iframe、字体和 `blob:` 资源；`<timecat-player>` UI；导出为单个 HTML 文件；console、network、perf 插件 |
 | M3 媒体与实时 | Canvas / 视频轨（WebCodecs）、麦克风旁白、实时模式 |
-| M4 服务端与 AI | 接入服务、存储、控制台；语义转写、摘要、批量分析；MCP Server；生成 Playwright 用例 |
+| M4 服务端与 AI（暂缓） | 接入服务、存储、控制台；语义转写、摘要、批量分析；MCP Server；生成 Playwright 用例。按第 10 节的决定，不在当前范围内 |
 
-## 10. 待决策事项
+## 10. 决策记录（2026-10-20）
 
-1. **许可证**：新代码继续用 GPL-3.0，还是改用 MIT / Apache-2.0？这次是重写，不搬运旧代码，两条路都走得通。如果打算商用或嵌入闭源产品，宽松许可证更合适。
-2. **首期范围**：建议 M0–M2 先做纯前端 SDK，和原版定位一致；服务端和 AI 在协议层预留接口，到 M4 再落地。
-3. **npm 包名**：`timecatjs` 和 `@timecat/*` 都归原作者所有，需要换一个新的 scope 或名字。
-4. **旧录像兼容**：是否需要回放 TimeCat 1.x 录下的数据？需要的话做一个独立的转换器。
-5. **仓库组织**：建议直接在本分支替换成新的 monorepo，旧代码留在 git 历史里（可以打 tag 标记），两套代码不并存。
+1. **许可证**：GPL-3.0-or-later，与原项目一致。
+2. **范围**：只做纯前端 SDK（录制 + 回放），和原版定位一致。服务端与 AI 暂缓，TCR 格式为它们预留了扩展点（轨道、chunk 类型、`meta`）。
+3. **npm 包名**：使用 `@timecat-js/*` scope。`timecatjs` 和 `@timecat/*` 归原作者所有；仿照 faker 社区接手时用 `@faker-js` 的先例，保留 TimeCat 品牌，又与原作者的包明确区分。
+4. **旧录像**：不兼容 TimeCat 1.x 的数据，不做转换器。
+5. **仓库组织**：直接在当前仓库替换为新的 monorepo，1.x 源码保留在 `legacy-1.x` tag 和 git 历史中。
 
 ## 附录 A：编码方案基准（2026-10-20）
 
