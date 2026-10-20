@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <title>Checkout form fixture</title>
+        <style>
+            body {
+                margin: 0;
+                font:
+                    15px/1.5 system-ui,
+                    sans-serif;
+            }
+            form {
+                display: grid;
+                gap: 12px;
+                max-width: 560px;
+                margin: 32px auto;
+            }
+            label {
+                display: grid;
+                gap: 4px;
+            }
+            input,
+            select,
+            textarea {
+                padding: 8px;
+                border: 1px solid #bbb;
+                border-radius: 6px;
+                font: inherit;
+            }
+        </style>
+    </head>
+    <body>
+        <form id="checkout" autocomplete="off">
+            <label>Full name <input id="name" name="name" type="text" /></label>
+            <label>Email <input id="email" name="email" type="email" /></label>
+            <label>Phone <input id="phone" name="phone" type="tel" /></label>
+            <label>Address <input id="address" name="address" type="text" /></label>
+            <label>City <input id="city" name="city" type="text" /></label>
+            <label
+                >Country
+                <select id="country" name="country">
+                    <option value="cn">China</option>
+                    <option value="jp">Japan</option>
+                    <option value="us">United States</option>
+                    <option value="de">Germany</option>
+                </select>
+            </label>
+            <label>Card number <input id="card" name="card" type="text" inputmode="numeric" /></label>
+            <label>Password <input id="password" name="password" type="password" /></label>
+            <label>Notes <textarea id="notes" name="notes" rows="4"></textarea></label>
+            <label><input id="terms" name="terms" type="checkbox" /> I accept the terms</label>
+            <button type="button">Place order</button>
+        </form>
+    </body>
+</html>

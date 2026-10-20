@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <title>Product list fixture</title>
+        <style>
+            * {
+                box-sizing: border-box;
+            }
+            body {
+                margin: 0;
+                font:
+                    14px/1.5 system-ui,
+                    sans-serif;
+                color: #111;
+            }
+            .site-header {
+                position: sticky;
+                top: 0;
+                z-index: 10;
+                background: #fff;
+                border-bottom: 1px solid #ddd;
+            }
+            .site-header nav {
+                display: flex;
+                gap: 16px;
+                padding: 12px 16px;
+                overflow-x: auto;
+            }
+            .nav-link {
+                color: #333;
+                text-decoration: none;
+                white-space: nowrap;
+            }
+            main {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+                gap: 16px;
+                padding: 16px;
+            }
+            .product-card {
+                border: 1px solid #e5e5e5;
+                border-radius: 8px;
+                padding: 12px;
+            }
+            .product-card img {
+                display: block;
+                width: 100%;
+                aspect-ratio: 1;
+                background: #f2f2f2;
+                object-fit: cover;
+            }
+            .rating svg {
+                width: 14px;
+                height: 14px;
+                fill: #f5b301;
+            }
+            .price {
+                font-size: 18px;
+                font-weight: 700;
+            }
+            .actions {
+                display: flex;
+                gap: 8px;
+            }
+            .btn {
+                flex: 1;
+                padding: 8px;
+                border: 1px solid #111;
+                border-radius: 6px;
+                background: #111;
+                color: #fff;
+            }
+            .btn-secondary {
+                flex: 0;
+                background: #fff;
+                color: #111;
+            }
+        </style>
+    </head>
+    <body>
+        <script>
+            // Builds a large, realistic e-commerce DOM. ?cards=N controls the size (~32 nodes per card).
+            ;(() => {
+                const cards = Number(new URLSearchParams(location.search).get('cards') ?? 400)
+                const star =
+                    '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M9.05 2.93c.3-.92 1.6-.92 1.9 0l1.07 3.29a1 1 0 0 0 .95.69h3.46c.97 0 1.37 1.24.59 1.81l-2.8 2.03a1 1 0 0 0-.36 1.12l1.07 3.29c.3.92-.76 1.69-1.54 1.12l-2.8-2.03a1 1 0 0 0-1.18 0l-2.8 2.03c-.78.57-1.84-.2-1.54-1.12l1.07-3.29a1 1 0 0 0-.36-1.12L2.98 8.72c-.78-.57-.38-1.81.59-1.81h3.46a1 1 0 0 0 .95-.69l1.07-3.29z"/></svg>'
+                const parts = ['<header class="site-header"><nav>']
+                for (let i = 0; i < 12; i++) {
+                    parts.push(`<a class="nav-link" href="/category/${i}">Category ${i}</a>`)
+                }
+                parts.push('</nav></header><main>')
+                for (let i = 0; i < cards; i++) {
+                    const id = 100000 + i
+                    parts.push(`
+<article class="product-card" data-product-id="${id}" data-testid="product-card">
+  <a class="product-link" href="/p/${id}/awesome-product-${i}"><img src="/img/${id}.svg" alt="Awesome product ${i}" loading="lazy" width="400" height="400"></a>
+  <h3 class="product-title">Awesome Product ${i} - Limited Edition with an Extra Long Name</h3>
+  <div class="rating" aria-label="Rated 4.5 out of 5">${star.repeat(5)}<span class="reviews">(${(i * 37) % 1000} reviews)</span></div>
+  <p class="price">$${((i * 13.37) % 500).toFixed(2)}</p>
+  <div class="actions"><button class="btn" type="button">Add to cart</button><button class="btn btn-secondary" type="button" aria-label="Add to wishlist">&#9825;</button></div>
+</article>`)
+                }
+                parts.push('</main>')
+                document.body.insertAdjacentHTML('beforeend', parts.join(''))
+            })()
+        </script>
+    </body>
+</html>

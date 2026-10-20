@@ -1,0 +1,17 @@
+{
+    "name": "@timecat-js/bench",
+    "private": true,
+    "description": "Recorder benchmarks: main-thread cost, long tasks and data size on fixture pages",
+    "license": "GPL-3.0-or-later",
+    "type": "module",
+    "scripts": {
+        "bench": "node src/run.ts",
+        "typecheck": "tsc -p ."
+    },
+    "devDependencies": {
+        "@rrweb/record": "catalog:",
+        "@types/node": "catalog:",
+        "playwright": "catalog:",
+        "typescript": "catalog:"
+    }
+}
