@@ -118,7 +118,7 @@ export class MediaPlayer {
                 this.#lastClips.set(track, clip)
             } else if (event.kind === MediaKind.Video) {
                 if (!this.#videos.has(track)) {
-                    this.#videos.set(track, new VideoTrack(track, timeline, host.onError))
+                    this.#videos.set(track, new VideoTrack(track, timeline, host.onError, host.onDrawn))
                 }
             } else if (!timeline.warnings.some(warning => warning.startsWith(`media track ${track} `))) {
                 timeline.warnings.push(`media track ${track} holds encoded audio, which the player does not play`)

@@ -14,8 +14,10 @@ import type {
     TcrEvent
 } from '@timecat-js/protocol'
 import { Assets } from './assets.ts'
+import { Canvases } from './canvases.ts'
 import {
     HTML_NAMESPACE,
+    isCanvas,
     isCharacterData,
     isComment,
     isDoctype,
@@ -43,6 +45,16 @@ export const PLAYER_ATTRIBUTE = 'data-timecat-player'
  * loaded from a URL.
  */
 const POLICY = "script-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; form-action 'none'"
+
+/**
+ * Undoes the style sheet a browser puts first in each document of an extension, which sets the font of `body`
+ * (Chrome's sets `font-family` and `font-size: 75%`), so that the page's own rules decide it, as when it was
+ * recorded. `revert-layer` takes the font back to what the page's cascade layers, or the browser's defaults, give.
+ */
+const EXTENSION_FONT = 'body { font-family: revert-layer; font-size: revert-layer }'
+
+/** Attributes whose change can change what a canvas shows. */
+const CANVAS_ATTRIBUTES = new Set(['style', 'width', 'height'])
 
 /** Stands in for elements whose recorded name this browser does not accept, so their children still show. */
 const INVALID_TAG = 'timecat-invalid'
@@ -89,6 +101,7 @@ interface Level {
 export class Materializer {
     readonly #document: Document
     readonly #assets: Assets
+    readonly #canvases: Canvases
     #nodes = new Map<number, Node>()
     /**
      * While a snapshot is built, the nodes shown before it, which it takes back where it has the same ones: what
@@ -112,11 +125,17 @@ export class Materializer {
     readonly #scrolls = new Map<Node, PendingScroll>()
     /** Whether the document renders in quirks mode; undefined until it is first written. */
     #quirks: boolean | undefined
+    /** Whether the browser styles the font of `body` beyond its defaults; undefined until the document is written. */
+    #extensionFont: boolean | undefined
 
-    /** `assets` holds what the recording keeps of `blob:` URLs and fonts. */
-    constructor(document: Document, assets: Assets = new Assets()) {
+    /**
+     * `assets` holds what the recording keeps of `blob:` URLs and fonts; `canvases`, the pictures of what is drawn
+     * in canvases.
+     */
+    constructor(document: Document, assets: Assets = new Assets(), canvases: Canvases = new Canvases()) {
         this.#document = document
         this.#assets = assets
+        this.#canvases = canvases
         this.#rewrite = text => assets.rewrite(text)
         this.#sheets = new ConstructedSheets(this.#rewrite)
     }
@@ -143,6 +162,8 @@ export class Materializer {
         if (!reuse) {
             openDocument(document, root.quirks)
             this.#quirks = root.quirks
+            // The empty document shows what the browser puts in every one.
+            this.#extensionFont ??= stylesBodyFont(document)
         }
         this.#reset(reuse)
         try {
@@ -242,6 +263,14 @@ export class Materializer {
             document.replaceChildren()
             base = document.createElement('base')
             base.setAttribute(PLAYER_ATTRIBUTE, '')
+            if (this.#extensionFont === true) {
+                // In the base element, the one element of the player's that stays first in the document, before the
+                // page's style sheets. A style element works wherever it is in the document.
+                const style = document.createElement('style')
+                style.setAttribute(PLAYER_ATTRIBUTE, '')
+                style.textContent = EXTENSION_FONT
+                base.append(style)
+            }
             this.#bases.set(document, base)
         } else if (!base.isConnected) {
             document.documentElement?.prepend(base)
@@ -576,6 +605,8 @@ export class Materializer {
         }
         if (isScript(element)) {
             element.setAttribute('type', INERT_SCRIPT_TYPE)
+        } else if (isCanvas(element)) {
+            this.#canvases.show(element)
         } else if (isHtml(element, 'base')) {
             const state = this.#states.get(document)
             if (state !== undefined) {
@@ -701,6 +732,9 @@ export class Materializer {
             const node = nodes.get(id)
             if (node !== undefined && isElement(node)) {
                 this.#setAttribute(node, name, value)
+                if (CANVAS_ATTRIBUTES.has(name) && isCanvas(node)) {
+                    this.#canvases.show(node)
+                }
                 const state = name === 'href' ? this.#states.get(node.ownerDocument) : undefined
                 if (state !== undefined && state.bases.has(node)) {
                     state.basesChanged = true
@@ -909,6 +943,18 @@ export class Materializer {
 }
 
 const DOCUMENT_POSITION_PRECEDING = 2
+
+/** Whether the browser sets the font of `body` in `document`, which by default has that of the root element. */
+function stylesBodyFont(document: Document): boolean {
+    const window = document.defaultView
+    const body = document.body
+    if (window === null || body === null || document.documentElement === null) {
+        return false
+    }
+    const root = window.getComputedStyle(document.documentElement)
+    const style = window.getComputedStyle(body)
+    return style.fontSize !== root.fontSize || style.fontFamily !== root.fontFamily
+}
 
 /** Writes an empty document in the right mode, with the policy that stays for everything built in it. */
 function openDocument(document: Document, quirks: boolean): void {

@@ -9,6 +9,7 @@ import type {
     ViewportEvent
 } from '@timecat-js/protocol'
 import { Assets } from './assets.ts'
+import { Canvases } from './canvases.ts'
 import { Materializer } from './materializer.ts'
 import type { MediaPlayer } from './media/media.ts'
 import { pointerAt } from './pointer.ts'
@@ -239,6 +240,7 @@ class ReplayPlayer extends EventTarget implements Player {
     readonly #stage: Stage
     readonly #materializer: Materializer
     readonly #assets: Assets
+    readonly #canvases = new Canvases()
     readonly #document: Document
     readonly #onError: (error: unknown) => void
     readonly #start: number
@@ -280,7 +282,7 @@ class ReplayPlayer extends EventTarget implements Player {
         for (const statics of timeline.statics) {
             this.#assets.add(readEvents(statics))
         }
-        this.#materializer = new Materializer(this.#document, this.#assets)
+        this.#materializer = new Materializer(this.#document, this.#assets, this.#canvases)
         this.#onError = onError
         this.#start = timeline.start
         this.#end = Math.max(timeline.end, this.#start)
@@ -457,6 +459,7 @@ class ReplayPlayer extends EventTarget implements Player {
         cancelAnimationFrame(this.#retry)
         this.#stage.destroy()
         this.#assets.revoke()
+        this.#canvases.revoke()
         this.#snapshots.clear()
         this.#media?.destroy()
         this.onDestroy()
@@ -528,6 +531,7 @@ class ReplayPlayer extends EventTarget implements Player {
                 node: id => this.#materializer.node(id),
                 document: this.#stage.ownerDocument,
                 onError: this.#onError,
+                onDrawn: canvas => this.#canvases.drawn(canvas),
                 onBlocked: () => {
                     this.muted = true
                 }

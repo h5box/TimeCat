@@ -3,7 +3,7 @@ import type { Settings, StartResult, Status } from './messages.ts'
 import { loadSettings, saveSettings } from './settings.ts'
 import { ask, byId, formatDuration, isRecordable, localize, t } from './ui.ts'
 
-const OPTIONS: readonly (keyof Settings)[] = ['console', 'network', 'perf', 'canvas', 'video', 'maskText']
+const OPTIONS: readonly (keyof Settings)[] = ['console', 'network', 'perf', 'canvas', 'video', 'inputs', 'maskText']
 
 async function main(): Promise<void> {
     localize()

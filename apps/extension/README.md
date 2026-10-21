@@ -28,8 +28,8 @@ After a rebuild, press the reload button on the extension's card. Chrome 120 or 
 - **Stop:** the same button or keys. The recording opens in a new tab. Closing the tab stops its recording too.
 - **What is recorded:** the popup sets it for the recordings to come. Console messages and errors, requests and
   performance (Web Vitals, long animation frames) are on; canvases and the pictures of videos, which take much more
-  room, are off. **Mask all text of pages** records the page's text as asterisks, keeping its spaces. What is typed into
-  fields is always masked.
+  room, are off. What is typed into fields is masked, its length kept, unless **What is typed into fields** is on;
+  passwords always are. **Mask all text of pages** records the page's text as asterisks, keeping its spaces.
 - **Recordings:** **All recordings** in the popup lists them, newest first. Each one can be played, exported as one HTML
   file that plays anywhere with nothing to install, downloaded as a `.tcr` file for
   [`@timecat-js/player`](../../packages/player), or deleted.

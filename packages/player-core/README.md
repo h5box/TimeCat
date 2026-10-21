@@ -117,6 +117,15 @@ attributes are filtered: event handlers, `javascript:` URLs, `autofocus`, `autop
 of frames are left out. Scripts are kept, with a type no browser runs. The frame is `inert` and covered by a shield,
 so the viewer's clicks and keys never reach the recorded page.
 
+**Canvases.** A document without scripts shows a canvas's fallback content rather than its bitmap, which leaves the
+canvas with no size. So each replayed `<canvas>` gets a picture as the `content` of its style: what was drawn in it,
+or an empty picture of its bitmap's size. The canvas then shows the picture, in the room the canvas took when it was
+recorded.
+
+**In extensions.** Chrome adds a style sheet to every document of an extension, the replay's too, which sets the font
+of `body`. When the replay's document has one, the player undoes it, so that the page's own rules decide the font, as
+when it was recorded.
+
 **Media.** The player's media code loads only for recordings that have some. Media packets are kept apart from the
 events, per track. A video track encoded with WebCodecs is decoded with `VideoDecoder`, from the last key packet
 before the time shown, and drawn into the replayed `<canvas>` it belongs to. A container track, such as what
@@ -149,8 +158,8 @@ The last two versions of Chrome, Edge, Firefox and Safari.
 ## Limitations
 
 - Frames the recorder could not read, such as cross-origin ones, show a blank page.
-- Canvas content shows only where `@timecat-js/plugin-canvas` recorded it, and the pixels of a `<video>` only where
-  `@timecat-js/plugin-media` captured them; otherwise media elements play their own source again. Audio tracks
+- Canvas content shows only where `@timecat-js/plugin-canvas` recorded it (other canvases keep their size, empty),
+  and the pixels of a `<video>` only where `@timecat-js/plugin-media` captured them; otherwise media elements play their own source again. Audio tracks
   encoded with WebCodecs are not played.
 - Resources load at replay time: whatever has changed or gone since, or does not allow cross-origin use (fonts
   without CORS headers, for example), shows differently.

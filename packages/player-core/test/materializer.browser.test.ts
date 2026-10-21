@@ -11,6 +11,7 @@ import type { SheetChange, SnapshotEvent, TcrEvent } from '@timecat-js/protocol'
 import * as fc from 'fast-check'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Assets } from '../src/assets.ts'
+import { Canvases } from '../src/canvases.ts'
 import { isDocument, isFrame, isHtml, isInput, isSelect, isShadowRoot, isStyle, isTextArea } from '../src/dom.ts'
 import { Materializer, PLAYER_ATTRIBUTE } from '../src/materializer.ts'
 import { Stage } from '../src/stage.ts'
@@ -36,14 +37,17 @@ afterEach(() => {
 })
 
 /** A materializer for the document of a new stage. */
-async function setUp(assets?: Assets): Promise<{ document: Document; materializer: Materializer }> {
+async function setUp(
+    assets?: Assets,
+    canvases?: Canvases
+): Promise<{ document: Document; materializer: Materializer }> {
     const container = document.createElement('div')
     container.style.cssText = 'width: 400px; height: 300px'
     document.body.append(container)
     containers.push(container)
     const stage = await Stage.create(container)
     stages.push(stage)
-    return { document: stage.document, materializer: new Materializer(stage.document, assets) }
+    return { document: stage.document, materializer: new Materializer(stage.document, assets, canvases) }
 }
 
 /** Applies an event the way the player does. */
@@ -155,6 +159,10 @@ function isFrameNode(node: Node): node is HTMLIFrameElement | HTMLFrameElement {
 
 function isStyleNode(node: Node): node is HTMLStyleElement | SVGStyleElement {
     return isElement(node) && isStyle(node)
+}
+
+function isCanvasNode(node: Node): node is HTMLCanvasElement {
+    return isElement(node) && isHtml(node, 'canvas')
 }
 
 function isImage(node: Node): node is HTMLImageElement {
@@ -889,5 +897,88 @@ describe('Materializer', () => {
         expect(document.fonts.size).toBe(size)
         assets.revoke()
         await expect(fetch(local).catch((error: unknown) => error)).resolves.toBeInstanceOf(TypeError)
+    })
+
+    it('shows canvases at the size of their bitmap, and what is drawn in them, in a document without scripts', async () => {
+        const canvases = new Canvases()
+        const { materializer } = await setUp(undefined, canvases)
+        // body 5: canvas 6, canvas 7, canvas 8
+        materializer.build(
+            pageOf([
+                { tag: 'canvas', attributes: ['width', '40', 'height', '20'] },
+                { tag: 'canvas', attributes: ['style', 'height: 10px'] },
+                { tag: 'canvas', attributes: ['width', '40', 'height', '20', 'style', 'display: block; width: 80px'] }
+            ])
+        )
+        const sizeOf = (id: number): number[] => {
+            const { width, height } = nodeOf(materializer, id, isCanvasNode).getBoundingClientRect()
+            return [width, height]
+        }
+        await expect.poll(() => sizeOf(6)).toEqual([40, 20])
+        // A bitmap of the default size, and sizes in CSS, as the canvas's own would take them.
+        await expect.poll(() => sizeOf(7)).toEqual([20, 10])
+        await expect.poll(() => sizeOf(8)).toEqual([80, 40])
+        materializer.apply(
+            mutations({
+                attributes: [
+                    { id: 6, name: 'width', value: '60' },
+                    { id: 6, name: 'style', value: 'margin: 1px' }
+                ]
+            })
+        )
+        await expect.poll(() => sizeOf(6)).toEqual([60, 20])
+        const canvas = nodeOf(materializer, 6, isCanvasNode)
+        const context = canvas.getContext('2d')!
+        context.fillStyle = 'rgb(255, 0, 0)'
+        context.fillRect(0, 0, 60, 20)
+        canvases.drawn(canvas)
+        const picture = (): string => /url\("(.*)"\)/.exec(canvas.style.getPropertyValue('content'))?.[1] ?? ''
+        await expect.poll(picture).toMatch(/^blob:/)
+        const url = picture()
+        const image = new Image()
+        image.src = url
+        await image.decode()
+        const copy = new OffscreenCanvas(60, 20).getContext('2d')!
+        copy.drawImage(image, 0, 0)
+        expect([...copy.getImageData(30, 10, 1, 1).data]).toEqual([255, 0, 0, 255])
+        // The picture stays through changes of the canvas's style, and goes with a bitmap of another size.
+        materializer.apply(mutations({ attributes: [{ id: 6, name: 'style', value: null }] }))
+        expect(picture()).toBe(url)
+        materializer.apply(mutations({ attributes: [{ id: 6, name: 'height', value: '30' }] }))
+        expect(picture()).toMatch(/^data:image\/svg\+xml,/)
+        await expect.poll(() => sizeOf(6)).toEqual([60, 30])
+        canvases.revoke()
+        await expect(fetch(url).catch((error: unknown) => error)).resolves.toBeInstanceOf(TypeError)
+    })
+
+    it('undoes a style sheet the browser puts first in its documents for the font of the body', async () => {
+        const { document, materializer } = await setUp()
+        const window = document.defaultView!
+        // As Chrome does in the documents of extensions, before the replay writes its document.
+        const injected = new window.CSSStyleSheet()
+        injected.replaceSync('body { font-family: fantasy; font-size: 75% }')
+        document.adoptedStyleSheets = [injected]
+        // head 4: style 5 (text 6)
+        materializer.build(pageOf([], { head: [{ tag: 'style', children: [{ text: '' }] }] }))
+        expect(document.adoptedStyleSheets).toEqual([])
+        // Before the page's sheets, as an injected sheet is: the player keeps its base element first in the head.
+        const style = document.createElement('style')
+        style.textContent = 'body { font-family: fantasy; font-size: 75% }'
+        document.documentElement.prepend(style)
+        const fontOf = (element: Element): string[] => {
+            const { fontFamily, fontSize } = window.getComputedStyle(element)
+            return [fontFamily, fontSize]
+        }
+        const root = fontOf(document.documentElement)
+        expect(fontOf(document.body)).toEqual(root)
+        // The page's own rules decide, those in cascade layers too.
+        materializer.apply(mutations({ texts: [{ id: 6, data: '@layer base { body { font-size: 20px } }' }] }))
+        expect(fontOf(document.body)).toEqual([root[0], '20px'])
+        materializer.apply(mutations({ texts: [{ id: 6, data: 'body { font-family: serif; font-size: 10px }' }] }))
+        expect(fontOf(document.body)).toEqual(['serif', '10px'])
+        // Not in a browser that leaves the body's font alone.
+        const plain = await setUp()
+        plain.materializer.build(pageOf([]))
+        expect(plain.document.querySelector(`[${PLAYER_ATTRIBUTE}] style`)).toBeNull()
     })
 })

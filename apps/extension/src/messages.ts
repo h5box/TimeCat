@@ -7,6 +7,8 @@ export interface Settings {
     canvas: boolean
     /** What videos show, as video; how they play is recorded anyway. */
     video: boolean
+    /** Records what is typed into fields as typed, except passwords. */
+    inputs: boolean
     /** Records the text of pages as asterisks. */
     maskText: boolean
 }

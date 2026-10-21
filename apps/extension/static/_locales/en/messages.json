@@ -22,8 +22,9 @@
     "optPerf": { "message": "Performance (Web Vitals, long frames)" },
     "optCanvas": { "message": "What canvases show, as video" },
     "optVideo": { "message": "What videos show, as video" },
+    "optInputs": { "message": "What is typed into fields" },
     "optMask": { "message": "Mask all text of pages" },
-    "optionsHint": { "message": "Changes apply to the next recording. Passwords and form input are always masked." },
+    "optionsHint": { "message": "Changes apply to the next recording. Passwords are always masked." },
     "allRecordings": { "message": "All recordings" },
     "recordings": { "message": "Recordings" },
     "empty": {

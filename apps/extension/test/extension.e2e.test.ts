@@ -222,13 +222,20 @@ describe('the extension', () => {
             const element = document.querySelector<TimecatPlayer>('timecat-player')
             await element?.seek(1100)
             const replayed = element?.player?.document
+            const [body, root] = [replayed?.body, replayed?.documentElement].map(styled =>
+                styled === undefined ? undefined : getComputedStyle(styled)
+            )
             return {
                 heading: replayed?.querySelector('h1')?.textContent,
-                input: replayed?.querySelector('input')?.value
+                input: replayed?.querySelector('input')?.value,
+                bodyFont: [body?.fontSize, body?.fontFamily],
+                rootFont: [root?.fontSize, root?.fontFamily]
             }
         })
         expect(firstPage.heading).toBe('Paid')
         expect(firstPage.input).toMatch(/^\*+$/u)
+        // Not the font Chrome gives the body in the documents of extensions, the replay's among them.
+        expect(firstPage.bodyFont).toEqual(firstPage.rootFont)
 
         // The second page, at the end.
         const thanks = await player.evaluate(async total => {
@@ -346,6 +353,35 @@ describe('the extension', () => {
         const replay = await stopRecording(tabId)
         expect(await textAtEnd(replay, 'h1')).toBe('Paid')
         expect(await replay.locator('#meta').textContent()).toContain('3 pages')
+        await replay.close()
+        await tab.close()
+    })
+
+    it('records what is typed into fields once the popup says so', async () => {
+        const popup = await context.newPage()
+        await popup.goto(extensionUrl('popup.html'))
+        await popup.check('#option-inputs')
+        await expect
+            .poll(() => background.evaluate(async () => (await chrome.storage.local.get('settings'))['settings']))
+            .toMatchObject({ inputs: true })
+        const tab = await context.newPage()
+        await tab.goto(`${origin}/`)
+        const tabId = await tabIdOf(`${origin}/`)
+        expect(await ask<StartResult>({ type: 'start', tabId })).toEqual({ ok: true })
+        await waitForPages(tabId, 1)
+        await delay(300)
+        await tab.fill('#name', 'Ada Lovelace')
+        await delay(1200)
+        const replay = await stopRecording(tabId)
+        const duration = await loaded(replay)
+        const typed = await replay.evaluate(async total => {
+            const element = document.querySelector<TimecatPlayer>('timecat-player')
+            await element?.seek(total)
+            return element?.player?.document.querySelector('input')?.value
+        }, duration)
+        expect(typed).toBe('Ada Lovelace')
+        await popup.uncheck('#option-inputs')
+        await popup.close()
         await replay.close()
         await tab.close()
     })

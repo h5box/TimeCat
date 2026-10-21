@@ -27,6 +27,8 @@ export interface MediaHost {
     /** The document the player's own media elements are made in. */
     readonly document: Document
     readonly onError: (error: unknown) => void
+    /** Something was drawn in a replayed canvas. */
+    readonly onDrawn: (canvas: HTMLCanvasElement) => void
     /** The browser did not let media play with sound before the viewer interacted with the page. */
     readonly onBlocked: () => void
 }
@@ -177,8 +179,15 @@ export class Clip {
     #draw(): void {
         const canvas = this.#canvas
         const element = this.#video
-        if (canvas !== undefined && element !== undefined && element.readyState >= HAVE_CURRENT_DATA) {
-            canvas.getContext('2d')?.drawImage(element, 0, 0, canvas.width, canvas.height)
+        const context = canvas?.getContext('2d')
+        if (
+            canvas !== undefined &&
+            element !== undefined &&
+            element.readyState >= HAVE_CURRENT_DATA &&
+            context != null
+        ) {
+            context.drawImage(element, 0, 0, canvas.width, canvas.height)
+            this.#host.onDrawn(canvas)
         }
     }
 }

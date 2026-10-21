@@ -1,8 +1,16 @@
 import type { Settings } from './messages.ts'
 
-const DEFAULTS: Settings = { console: true, network: true, perf: true, canvas: false, video: false, maskText: false }
+const DEFAULTS: Settings = {
+    console: true,
+    network: true,
+    perf: true,
+    canvas: false,
+    video: false,
+    inputs: false,
+    maskText: false
+}
 
-const KEYS: readonly (keyof Settings)[] = ['console', 'network', 'perf', 'canvas', 'video', 'maskText']
+const KEYS: readonly (keyof Settings)[] = ['console', 'network', 'perf', 'canvas', 'video', 'inputs', 'maskText']
 
 export async function loadSettings(): Promise<Settings> {
     const items = await chrome.storage.local.get('settings')

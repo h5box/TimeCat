@@ -536,7 +536,8 @@ describe('replay of a recording', () => {
                 '<input id="password" class="free" type="password" value="hunter2"><input id="name" value="Alice">' +
                 '<input id="free" class="free" value="shown"><textarea id="memo">pelican</textarea>' +
                 '<div class="blocked" style="width: 120px; height: 30px">giraffe <i>okapi</i></div>' +
-                '<div class="ignored"><input id="ignored" class="free" value="v"></div></body>',
+                '<div class="ignored"><input id="ignored" class="free" value="v"></div>' +
+                '<input id="volume" type="range" value="20"><input id="tint" type="color" value="#102030"></body>',
             maskText: '.secret',
             block: '.blocked',
             ignore: '.ignored',
@@ -548,6 +549,8 @@ describe('replay of a recording', () => {
         typeInto(inputById(page, 'free'), 'typed')
         typeInto(inputById(page, 'ignored'), 'walrus')
         typeInto(byIdAs(page, 'memo', isTextArea), 'flamingo')
+        typeInto(inputById(page, 'volume'), '70')
+        typeInto(inputById(page, 'tint'), '#405060')
         const bold = page.querySelector('.secret b')
         if (bold !== null && isElement(bold)) {
             bold.textContent = 'quokka'
@@ -584,7 +587,10 @@ describe('replay of a recording', () => {
                 '<input class="free" id="free" value="shown"> (value: "typed")',
                 '<textarea id="memo"> (value: "********")',
                 '<div class="blocked" data-timecat-blocked="" style="width:120px;height:30px">',
-                '<input class="free" id="ignored" value="v"> (value: "v")'
+                '<input class="free" id="ignored" value="v"> (value: "v")',
+                // Picked, not typed.
+                '<input id="volume" type="range" value="20"> (value: "70")',
+                '<input id="tint" type="color" value="#102030"> (value: "#405060")'
             ])
         )
     })

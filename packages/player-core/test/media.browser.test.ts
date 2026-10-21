@@ -121,10 +121,18 @@ async function recordWebm(colors: readonly string[]) {
     return { type, packets, starts }
 }
 
-/** The color in the middle of the replayed canvas, as the channel that dominates it. */
-function colorOf(player: Player): string {
+/**
+ * The color in the middle of what the replayed canvas shows, the picture of its bitmap, as the channel that
+ * dominates it.
+ */
+async function colorOf(player: Player): Promise<string> {
     const canvas = player.document.querySelector('canvas')!
-    const [r, g, b] = canvas.getContext('2d')!.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data
+    const image = new Image()
+    image.src = /url\("(.*)"\)/.exec(canvas.style.getPropertyValue('content'))?.[1] ?? ''
+    await image.decode()
+    const copy = new OffscreenCanvas(canvas.width, canvas.height).getContext('2d')!
+    copy.drawImage(image, 0, 0)
+    const [r, g, b] = copy.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data
     if (r! > 150 && g! < 100 && b! < 100) {
         return RED
     }
@@ -195,7 +203,7 @@ describe('media', () => {
             // oxlint-disable-next-line no-await-in-loop -- one time after the other
             await player.seek(time)
             // oxlint-disable-next-line no-await-in-loop -- decoding takes a moment
-            await vi.waitFor(() => expect(colorOf(player)).toBe(color))
+            await vi.waitFor(async () => expect(await colorOf(player)).toBe(color))
         }
     })
 
@@ -219,7 +227,7 @@ describe('media', () => {
             // oxlint-disable-next-line no-await-in-loop -- one time after the other
             await player.seek(starts[i]! + SPAN / 2)
             // oxlint-disable-next-line no-await-in-loop -- the frame comes once the video seeked
-            await vi.waitFor(() => expect(colorOf(player)).toBe(color))
+            await vi.waitFor(async () => expect(await colorOf(player)).toBe(color))
         }
     })
 

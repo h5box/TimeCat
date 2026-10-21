@@ -14,6 +14,7 @@ export class VideoTrack {
     readonly #track: number
     readonly #timeline: Timeline
     readonly #onError: (error: unknown) => void
+    readonly #onDrawn: (canvas: HTMLCanvasElement) => void
     #decoder: VideoDecoder | undefined
     /** The declaration the decoder is configured for. */
     #configured: MediaTrackEvent | undefined
@@ -28,10 +29,16 @@ export class VideoTrack {
     readonly #failed = new WeakSet<MediaTrackEvent>()
     #attempt: MediaTrackEvent | undefined
 
-    constructor(track: number, timeline: Timeline, onError: (error: unknown) => void) {
+    constructor(
+        track: number,
+        timeline: Timeline,
+        onError: (error: unknown) => void,
+        onDrawn: (canvas: HTMLCanvasElement) => void
+    ) {
         this.#track = track
         this.#timeline = timeline
         this.#onError = onError
+        this.#onDrawn = onDrawn
     }
 
     /** Shows the frame at `time` in the canvas that `node` finds. */
@@ -167,8 +174,10 @@ export class VideoTrack {
     #draw(): void {
         const canvas = this.#canvas
         const frame = this.#frame
-        if (canvas !== undefined && frame !== undefined) {
-            canvas.getContext('2d')?.drawImage(frame, 0, 0, canvas.width, canvas.height)
+        const context = canvas?.getContext('2d')
+        if (canvas !== undefined && frame !== undefined && context != null) {
+            context.drawImage(frame, 0, 0, canvas.width, canvas.height)
+            this.#onDrawn(canvas)
         }
     }
 

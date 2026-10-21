@@ -18,8 +18,11 @@ export interface PrivacyOptions {
 /** Marks a blocked element in the recording. */
 export const BLOCKED_ATTRIBUTE = 'data-timecat-blocked'
 
-/** Input types whose value is a fixed label or token rather than something the user types. */
-const LABEL_TYPES = new Set(['button', 'submit', 'reset', 'image', 'checkbox', 'radio'])
+/**
+ * Input types whose value is a fixed label or token rather than something the user types, or a position or color
+ * picked, which says no more than whether a checkbox is checked.
+ */
+const UNMASKED_TYPES = new Set(['button', 'submit', 'reset', 'image', 'checkbox', 'radio', 'range', 'color'])
 
 /** How text directly inside an element is recorded. */
 export const TextMask = {
@@ -127,7 +130,7 @@ export class Privacy {
             if (type === 'password') {
                 return true
             }
-            if (LABEL_TYPES.has(type)) {
+            if (UNMASKED_TYPES.has(type)) {
                 return false
             }
         }

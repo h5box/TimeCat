@@ -41,6 +41,8 @@ if (!Reflect.has(window, LOADED)) {
                 segment: config.segment,
                 latency: config.latency,
                 maskText: config.settings.maskText ? 'html' : undefined,
+                // Passwords stay masked whatever the selector.
+                unmaskInputs: config.settings.inputs ? '*' : undefined,
                 plugins: pluginsFor(config.settings),
                 onData: bytes => send(to, { type: 'data', bytes }),
                 onError: error => send(to, { type: 'error', message: describe(error) })

@@ -97,8 +97,8 @@ returns the track's writer and `stop()`, which settles once the last bytes are w
 
 Form values are masked unless `unmaskInputs` says otherwise, and passwords always are: masking happens in the page,
 before anything is encoded, so what is masked never reaches the worker, storage or `onData`. The labels of buttons,
-checkboxes and radio buttons, and which of them are checked, are recorded as they are. A `<select>` with a masked
-value records no selection. Text in `<style>` elements is never masked, since that would break the CSS.
+checkboxes and radio buttons, and which of them are checked, are recorded as they are, and so are the values of range
+sliders and color pickers. A `<select>` with a masked value records no selection. Text in `<style>` elements is never masked, since that would break the CSS.
 
 The regions `maskText` and `ignore` select take in the shadow trees and frames inside them. Selectors match within
 each tree, as CSS does: `.private p` does not reach a paragraph in a shadow tree below `.private`, but `.private`
