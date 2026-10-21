@@ -13,9 +13,11 @@ import { Materializer } from './materializer.ts'
 import { pointerAt } from './pointer.ts'
 import { Stage } from './stage.ts'
 import type { SegmentSource } from './timeline/build.ts'
-import { loadIndex } from './timeline/client.ts'
+import { indexStream, loadIndex, revive } from './timeline/client.ts'
+import type { LoadOptions } from './timeline/client.ts'
+import type { IndexResponse } from './timeline/messages.ts'
 import { Timeline } from './timeline/timeline.ts'
-import type { Keyframe } from './timeline/types.ts'
+import type { Keyframe, TimelineIndex } from './timeline/types.ts'
 
 /** A recording segment, as written by the recorder: a TCR file as a blob, a buffer or a view of one. */
 export type RecordingSource = Blob | ArrayBuffer | ArrayBufferView
@@ -58,7 +60,8 @@ export interface TimedEvent {
 
 /**
  * Plays a recording in a sandboxed frame. Times are in milliseconds from the first recorded event. Dispatches
- * `play`, `pause`, `ended` and, while playing and after seeking, `timeupdate`.
+ * `play`, `pause`, `ended`, `timeupdate` while playing and after seeking, and `durationchange` when more of a live
+ * recording came or it ended.
  */
 export interface Player extends EventTarget {
     readonly sessionId: string
@@ -68,15 +71,20 @@ export interface Player extends EventTarget {
     readonly meta: Readonly<Record<string, unknown>>
     /** Problems the recording was read despite, such as a truncated last chunk. */
     readonly warnings: readonly string[]
-    /** From the first event to the last thing recorded. */
+    /** From the first event to the last thing recorded; for a live recording, to the last that can be played. */
     readonly duration: number
+    /**
+     * More of the recording is to come, as from a stream: `duration` grows as it does, and playing on at its end
+     * waits for more rather than ending.
+     */
+    readonly live: boolean
     readonly currentTime: number
     readonly paused: boolean
     /** Playback rate; 1 is real time. */
     speed: number
     /** The replayed document, to look at: changing it breaks the replay. */
     readonly document: Document
-    /** Console messages, requests, measurements and events of the application, in time order. */
+    /** Console messages, requests, measurements and events of the application so far, in time order. */
     readonly events: readonly TimedEvent[]
     /** Plays from the current time, or from the start once ended. */
     play(): void
@@ -98,9 +106,13 @@ interface KeyframeState {
     styles: Uint8Array
 }
 
-/** Loads a recording, made of one or more segments of a session, and shows its start in `options.container`. */
+/**
+ * Loads a recording, made of one or more segments of a session, and shows its start in `options.container`. From a
+ * stream, such as one fed by the recorder's `onData`, the recording plays as it comes: the player is live, and
+ * shows the latest it can.
+ */
 export async function createPlayer(
-    source: RecordingSource | readonly RecordingSource[],
+    source: RecordingSource | readonly RecordingSource[] | ReadableStream<Uint8Array>,
     options: PlayerOptions
 ): Promise<Player> {
     const { container } = options
@@ -112,24 +124,104 @@ export async function createPlayer(
         throw new RangeError(`keyframeInterval must be positive, got ${keyframeInterval}`)
     }
     const speed = checkSpeed(options.speed ?? 1)
-    const sources = (isList(source) ? source : [source]).map(toSegment)
+    const onError = options.onError ?? logError
+    const loadOptions = { worker: options.worker ?? true, keyframeInterval }
     const stage = Stage.create(container)
-    let timeline: Timeline
-    try {
-        timeline = new Timeline(await loadIndex(sources, { worker: options.worker ?? true, keyframeInterval }))
-    } catch (error) {
-        ;(await stage).destroy()
-        throw error
+    let player: ReplayPlayer
+    if (isStream(source)) {
+        const feed = new StreamFeed(source, loadOptions, onError)
+        try {
+            player = new ReplayPlayer(await feed.timeline, await stage, speed, onError)
+        } catch (error) {
+            feed.stop()
+            ;(await stage).destroy()
+            throw error
+        }
+        feed.attach(player)
+    } else {
+        const sources = (isList(source) ? source : [source]).map(toSegment)
+        try {
+            player = new ReplayPlayer(new Timeline(await loadIndex(sources, loadOptions)), await stage, speed, onError)
+        } catch (error) {
+            ;(await stage).destroy()
+            throw error
+        }
     }
-    const player = new ReplayPlayer(timeline, await stage, speed, options.onError ?? logError)
-    await player.seek(0)
+    await player.seek(player.live ? player.duration : 0)
     if (options.autoplay === true) {
         player.play()
     }
     return player
 }
 
+/** Indexes a stream: the timeline settles once it has an event to show, then the player takes what comes. */
+class StreamFeed {
+    readonly timeline: Promise<Timeline>
+    readonly stop: () => void
+    readonly #onError: (error: unknown) => void
+    #player: ReplayPlayer | undefined
+    /** Errors before the player took over, the first of which is why there is no timeline, if there is none. */
+    readonly #errors: unknown[] = []
+
+    constructor(stream: ReadableStream<Uint8Array>, options: LoadOptions, onError: (error: unknown) => void) {
+        this.#onError = onError
+        let resolve: (timeline: Timeline) => void = ignore
+        let reject: (error: unknown) => void = ignore
+        this.timeline = new Promise((resolveTimeline, rejectTimeline) => {
+            resolve = resolveTimeline
+            reject = rejectTimeline
+        })
+        let timeline: Timeline | undefined
+        const receive = (response: IndexResponse): void => {
+            const player = this.#player
+            if (response.type === 'index') {
+                if (player !== undefined) {
+                    player.receive(response.index)
+                    return
+                }
+                if (timeline === undefined) {
+                    timeline = new Timeline(response.index)
+                } else {
+                    timeline.append(response.index)
+                }
+                // Until the first event, there is nothing to show.
+                if (timeline.count > 0 || timeline.done) {
+                    resolve(timeline)
+                }
+            } else if (response.type === 'error') {
+                const error = revive(response)
+                if (player !== undefined) {
+                    player.fail(error)
+                    return
+                }
+                reject(this.#errors[0] ?? error)
+                this.#errors.push(error)
+                timeline?.finish()
+            }
+        }
+        // A stream that fails ends there: indexing still finishes what came.
+        this.stop = indexStream(stream, options, receive, error => {
+            if (this.#player === undefined) {
+                this.#errors.push(error)
+            } else {
+                onError(error)
+            }
+        })
+    }
+
+    /** Hands what comes from now on to `player`, which stops the stream once destroyed. */
+    attach(player: ReplayPlayer): void {
+        this.#player = player
+        player.onDestroy = this.stop
+        for (const error of this.#errors) {
+            this.#onError(error)
+        }
+    }
+}
+
 class ReplayPlayer extends EventTarget implements Player {
+    /** Called once destroyed. */
+    onDestroy: () => void = ignore
     readonly #timeline: Timeline
     readonly #stage: Stage
     readonly #materializer: Materializer
@@ -137,9 +229,9 @@ class ReplayPlayer extends EventTarget implements Player {
     readonly #document: Document
     readonly #onError: (error: unknown) => void
     readonly #start: number
-    readonly #end: number
+    #end: number
     /** Stands for the viewport before the first one recorded. */
-    readonly #firstViewport: ViewportEvent | undefined
+    #firstViewport: ViewportEvent | undefined
     readonly #snapshots = new Map<Keyframe, { snapshot: Uint8Array; styles: Uint8Array }>()
     /** Keyframes that failed to decompress, which seeking does without. */
     readonly #broken = new Set<Keyframe>()
@@ -156,7 +248,9 @@ class ReplayPlayer extends EventTarget implements Player {
     #retry = 0
     /** A keyframe being decompressed, after which the document catches up with `#time`. */
     #loading: Promise<void> | undefined
-    #events: readonly TimedEvent[] | undefined
+    #events: readonly TimedEvent[] = []
+    /** Data payloads of the timeline that `#events` holds. */
+    #eventParts = 0
     #destroyed = false
 
     constructor(timeline: Timeline, stage: Stage, speed: number, onError: (error: unknown) => void) {
@@ -164,34 +258,41 @@ class ReplayPlayer extends EventTarget implements Player {
         this.#timeline = timeline
         this.#stage = stage
         this.#document = stage.document
-        this.#assets = new Assets(readEvents(timeline.index.statics))
+        this.#assets = new Assets()
+        for (const statics of timeline.statics) {
+            this.#assets.add(readEvents(statics))
+        }
         this.#materializer = new Materializer(this.#document, this.#assets)
         this.#onError = onError
-        this.#start = timeline.index.start
-        this.#end = Math.max(timeline.index.end, this.#start)
+        this.#start = timeline.start
+        this.#end = Math.max(timeline.end, this.#start)
         this.#firstViewport = timeline.firstViewport()
         this.#time = this.#start
         this.#speed = speed
     }
 
     get sessionId(): string {
-        return this.#timeline.index.sessionId
+        return this.#timeline.sessionId
     }
 
     get startedAt(): number {
-        return this.#timeline.index.startedAt
+        return this.#timeline.startedAt
     }
 
     get meta(): Readonly<Record<string, unknown>> {
-        return this.#timeline.index.meta
+        return this.#timeline.meta
     }
 
     get warnings(): readonly string[] {
-        return this.#timeline.index.warnings
+        return this.#timeline.warnings
     }
 
     get duration(): number {
         return this.#end - this.#start
+    }
+
+    get live(): boolean {
+        return !this.#timeline.done
     }
 
     get currentTime(): number {
@@ -220,15 +321,51 @@ class ReplayPlayer extends EventTarget implements Player {
     }
 
     get events(): readonly TimedEvent[] {
-        this.#events ??= readDataEvents(this.#timeline.index.data, this.#start)
+        const parts = this.#timeline.data
+        if (this.#eventParts < parts.length) {
+            const events = [...this.#events]
+            for (const part of parts.slice(this.#eventParts)) {
+                events.push(...readDataEvents(part, this.#start))
+            }
+            this.#eventParts = parts.length
+            // Parts come in time order mostly; tracks that end their chunks later may come later.
+            const ordered = events.every((event, i) => i === 0 || events[i - 1]!.time <= event.time)
+            this.#events = ordered ? events : events.toSorted((a, b) => a.time - b.time)
+        }
         return this.#events
+    }
+
+    /** Takes the next part of a live recording's index. */
+    receive(part: TimelineIndex): void {
+        if (this.#destroyed) {
+            return
+        }
+        const timeline = this.#timeline
+        timeline.append(part)
+        this.#firstViewport ??= timeline.firstViewport()
+        if (part.statics.length > 0) {
+            this.#assets.add(readEvents(part.statics))
+            // What the document shows may use them: it is built again.
+            this.#valid = false
+            if (!this.#playing) {
+                this.#update().catch(this.#onError)
+            }
+        }
+        this.#grow()
+    }
+
+    /** A live recording that cannot go on: what came is all there is. */
+    fail(error: unknown): void {
+        this.#onError(error)
+        this.#timeline.finish()
+        this.#grow()
     }
 
     play(): void {
         if (this.#playing || this.#destroyed) {
             return
         }
-        if (this.#time >= this.#end) {
+        if (this.#time >= this.#end && !this.live) {
             this.#time = this.#start
         }
         this.#playing = true
@@ -270,6 +407,7 @@ class ReplayPlayer extends EventTarget implements Player {
         this.#stage.destroy()
         this.#assets.revoke()
         this.#snapshots.clear()
+        this.onDestroy()
     }
 
     readonly #tick = (now: number): void => {
@@ -281,6 +419,12 @@ class ReplayPlayer extends EventTarget implements Player {
         this.#update().catch(this.#onError)
         this.dispatchEvent(new Event('timeupdate'))
         if (this.#time < this.#end) {
+            this.#frame = requestAnimationFrame(this.#tick)
+            return
+        }
+        if (this.live) {
+            // Waits at the edge, then plays on from there.
+            this.#anchor()
             this.#frame = requestAnimationFrame(this.#tick)
             return
         }
@@ -298,6 +442,15 @@ class ReplayPlayer extends EventTarget implements Player {
         this.#anchorNow = performance.now()
     }
 
+    /** Takes the timeline's new end, and says when the duration or liveness changed. */
+    #grow(): void {
+        const end = Math.max(this.#timeline.end, this.#start)
+        if (end !== this.#end || this.#timeline.done) {
+            this.#end = end
+            this.dispatchEvent(new Event('durationchange'))
+        }
+    }
+
     #stop(): void {
         this.#playing = false
         cancelAnimationFrame(this.#frame)
@@ -306,7 +459,7 @@ class ReplayPlayer extends EventTarget implements Player {
 
     /** Shows `#time`. Resolves once the document shows it, or a later time asked for meanwhile. */
     #update(): Promise<void> {
-        this.#stage.showPointer(pointerAt(this.#timeline.index.pointer, this.#time))
+        this.#stage.showPointer(pointerAt(this.#timeline.pointer, this.#time))
         if (this.#loading === undefined) {
             let loading: Promise<void> | undefined
             try {
@@ -504,6 +657,13 @@ function isList(source: RecordingSource | readonly RecordingSource[]): source is
     return Array.isArray(source)
 }
 
+function isStream(
+    source: RecordingSource | readonly RecordingSource[] | ReadableStream<Uint8Array>
+): source is ReadableStream<Uint8Array> {
+    // Duck-typed, because a stream can come from another realm.
+    return 'getReader' in source
+}
+
 function toSegment(source: RecordingSource): SegmentSource {
     if (ArrayBuffer.isView(source)) {
         return new Uint8Array(source.buffer, source.byteOffset, source.byteLength)
@@ -513,4 +673,8 @@ function toSegment(source: RecordingSource): SegmentSource {
 
 function logError(error: unknown): void {
     console.error('[timecat]', error)
+}
+
+function ignore(): void {
+    // Nothing to do.
 }

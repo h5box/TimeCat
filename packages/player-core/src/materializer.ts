@@ -114,7 +114,7 @@ export class Materializer {
     #quirks: boolean | undefined
 
     /** `assets` holds what the recording keeps of `blob:` URLs and fonts. */
-    constructor(document: Document, assets: Assets = new Assets([])) {
+    constructor(document: Document, assets: Assets = new Assets()) {
         this.#document = document
         this.#assets = assets
         this.#rewrite = text => assets.rewrite(text)

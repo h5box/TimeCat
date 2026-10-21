@@ -1,12 +1,22 @@
 import { EventType, PointerAction, PointerType } from '@timecat-js/protocol'
 import type { TcrEvent } from '@timecat-js/protocol'
 import * as fc from 'fast-check'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { isFrame } from '../src/dom.ts'
 import { createPlayer, TcrDecodeError } from '../src/index.ts'
 import type { Player, PlayerOptions, RecordingSource } from '../src/index.ts'
 import { operations, recordingOf } from './operations.ts'
-import { build, describeDom, mutations, pageOf, SESSION, writeRecording } from './recording.ts'
+import {
+    build,
+    concat,
+    describeDom,
+    mutations,
+    pageOf,
+    SESSION,
+    writeChunks,
+    writeRecording,
+    writeSync
+} from './recording.ts'
 import type { Timed } from './recording.ts'
 
 const containers: Element[] = []
@@ -30,7 +40,7 @@ function containerOf(): HTMLElement {
 }
 
 async function open(
-    source: RecordingSource | RecordingSource[],
+    source: RecordingSource | RecordingSource[] | ReadableStream<Uint8Array>,
     options: Partial<PlayerOptions> = {}
 ): Promise<Player> {
     const player = await createPlayer(source, { ...options, container: options.container ?? containerOf() })
@@ -40,6 +50,31 @@ async function open(
 
 function delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function once(target: EventTarget, type: string): Promise<void> {
+    return new Promise(resolve => target.addEventListener(type, () => resolve(), { once: true }))
+}
+
+/** A stream that bytes are pushed into, as a live recording sends them. */
+function feed() {
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    let cancelled = false
+    const stream = new ReadableStream<Uint8Array>({
+        start(started) {
+            controller = started
+        },
+        cancel() {
+            cancelled = true
+        }
+    })
+    return {
+        stream,
+        push: (bytes: Uint8Array) => controller.enqueue(bytes),
+        close: () => controller.close(),
+        fail: (error: unknown) => controller.error(error),
+        cancelled: () => cancelled
+    }
 }
 
 /** Text of the replayed paragraphs. */
@@ -323,6 +358,78 @@ describe('createPlayer', () => {
             expect(error).toMatchObject({ message: 'not a TCR stream: bad magic bytes' })
         }
         expect(container.childElementCount).toBe(0)
+    })
+
+    it('plays a stream as it comes, from its edge while it is live', async () => {
+        const { stream, push, close } = feed()
+        push(concat(writeRecording(story.slice(0, 2)), writeSync(50, 2)))
+        const player = await open(stream)
+        expect({ live: player.live, duration: player.duration, currentTime: player.currentTime }).toEqual({
+            live: true,
+            duration: 50,
+            currentTime: 50
+        })
+        expect(paragraphs(player)).toEqual(['one'])
+        let changed = once(player, 'durationchange')
+        push(concat(writeChunks(story.slice(2), 3), writeSync(500, 5)))
+        await changed
+        expect(player.duration).toBe(500)
+        await player.seek(450)
+        expect(paragraphs(player)).toEqual(['changed', 'two'])
+        // At the edge, playing waits for more.
+        const ended = vi.fn<() => void>()
+        player.addEventListener('ended', ended)
+        await player.seek(500)
+        player.play()
+        await delay(100)
+        expect(player.paused).toBe(false)
+        expect(ended).not.toHaveBeenCalled()
+        changed = once(player, 'durationchange')
+        const end = once(player, 'ended')
+        push(writeChunks([{ time: 600, event: mutations({ texts: [{ id: 9, data: 'three' }] }) }], 6))
+        close()
+        await changed
+        expect({ live: player.live, duration: player.duration }).toEqual({ live: false, duration: 600 })
+        await end
+        expect(paragraphs(player)).toEqual(['changed', 'three'])
+    })
+
+    it('plays what a stream gave before it failed, and reports the failure', async () => {
+        for (const worker of [true, false]) {
+            const errors: unknown[] = []
+            const { stream, push, fail } = feed()
+            const opening = open(stream, { worker, onError: error => errors.push(error) })
+            // Without sync points, the page events wait until the stream ends.
+            push(writeRecording(story))
+            // An error drops what the stream did not give yet.
+            // oxlint-disable-next-line no-await-in-loop -- one load at a time
+            await delay(50)
+            fail(new Error('connection lost'))
+            // oxlint-disable-next-line no-await-in-loop -- one load at a time
+            const player = await opening
+            expect({ live: player.live, duration: player.duration }).toEqual({ live: false, duration: 400 })
+            expect(paragraphs(player)).toEqual(['one'])
+            expect(errors).toMatchObject([{ message: 'connection lost' }])
+        }
+    })
+
+    it('rejects a stream that holds no recording', async () => {
+        const container = containerOf()
+        await expect(createPlayer(new Blob(['not a recording']).stream(), { container })).rejects.toThrow(
+            TcrDecodeError
+        )
+        const { stream, fail } = feed()
+        fail(new Error('offline'))
+        await expect(createPlayer(stream, { container })).rejects.toThrow('offline')
+        expect(container.childElementCount).toBe(0)
+    })
+
+    it('stops reading a stream once destroyed', async () => {
+        const { stream, push, cancelled } = feed()
+        push(concat(writeRecording(story.slice(0, 2)), writeSync(50, 2)))
+        const player = await open(stream)
+        player.destroy()
+        await vi.waitFor(() => expect(cancelled()).toBe(true))
     })
 
     it('stops for good once destroyed', async () => {

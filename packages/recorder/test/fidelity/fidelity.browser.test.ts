@@ -13,9 +13,9 @@ afterEach(closeSessions)
 
 /**
  * Finishes a recording and expects its replay to show each checkpoint's state at its time, seeking in `order`
- * (by default forward through the checkpoints, then back), with the keyframes of the recording and with
- * keyframes the player adds every few events. `describeState` says what the replay shows, as it said what the
- * page showed at checkpoints.
+ * (by default forward through the checkpoints, then back), with the keyframes of the recording, with keyframes
+ * the player adds every few events, and from a stream. `describeState` says what the replay shows, as it said
+ * what the page showed at checkpoints.
  */
 async function expectReplay(
     session: Session,
@@ -27,7 +27,11 @@ async function expectReplay(
     const indexes = order ?? [...checkpoints.keys(), ...[...checkpoints.keys()].toReversed()]
     const times = indexes.map(i => checkpoints[i]!.time)
     const expected = indexes.map(i => checkpoints[i]!.state)
-    const replays = await Promise.all([2000, 3].map(interval => replay(recording, times, interval, describeState)))
+    const replays = await Promise.all([
+        replay(recording, times, 2000, describeState),
+        replay(recording, times, 3, describeState),
+        replay(recording, times, 3, describeState, true)
+    ])
     for (const states of replays) {
         expect(states).toEqual(expected)
     }
@@ -463,7 +467,8 @@ describe('replay of a recording', () => {
                 fc.array(fc.array(pageOperation, { maxLength: 4 }), { maxLength: 6 }),
                 fc.integer({ min: 1, max: 6 }),
                 fc.array(fc.nat(), { maxLength: 8 }),
-                async (setup, during, later, checkEvery, jumps) => {
+                fc.array(fc.boolean(), { maxLength: 7 }),
+                async (setup, during, later, checkEvery, jumps, syncs) => {
                     let used = 0
                     // The recorder sees closed shadow roots attached once it started, as the page's code does.
                     const closedRoots = new Map<Element, ShadowRoot>()
@@ -492,6 +497,10 @@ describe('replay of a recording', () => {
                     const page = session.document
                     realms.add(page.defaultView!)
                     const checkpoint = (): void => {
+                        // A live recording's sync points change nothing of what the replay shows.
+                        if (syncs[session.checkpoints.length] === true) {
+                            session.sync()
+                        }
                         session.checkpoint()
                         for (const document of frameDocuments(page, closedRoots)) {
                             if (document.defaultView !== null) {

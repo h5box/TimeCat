@@ -823,7 +823,8 @@ describe('Materializer', () => {
     it('shows blob content from the recording at URLs of its own, and adds the recorded fonts', async () => {
         const image = 'blob:https://example.com/0b6f-image'
         const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"></svg>'
-        const assets = new Assets([
+        const assets = new Assets()
+        assets.add([
             { type: EventType.Asset, url: image, mimeType: 'image/svg+xml', data: new TextEncoder().encode(svg) },
             { type: EventType.Asset, url: image, mimeType: 'text/plain', data: new Uint8Array([1]) },
             { type: EventType.FontFace, family: 'Recorded', source: `url("${image}")`, descriptors: ['weight', '700'] },

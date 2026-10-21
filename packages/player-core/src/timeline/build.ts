@@ -7,9 +7,11 @@ import {
     EventType,
     gunzip,
     gzip,
+    MAGIC,
     readChunk,
     readEventFrames,
     readFileHeader,
+    SegmentReader,
     Track,
     writeEventFrame
 } from '@timecat-js/protocol'
@@ -22,7 +24,7 @@ export interface IndexOptions {
     keyframeInterval: number
 }
 
-/** A recording segment: a TCR file, as a blob or as bytes. */
+/** Recording bytes, as a blob or as bytes: one segment, or several one after the other. */
 export type SegmentSource = Blob | Uint8Array
 
 interface Segment {
@@ -54,50 +56,28 @@ const DATA_TYPES: ReadonlySet<number> = new Set([
 
 /**
  * Reads the segments of one session into a timeline index. Damage that a recording can survive, such as a
- * truncated last chunk, becomes a warning; a segment that is not a recording at all rejects.
+ * truncated last chunk, becomes a warning; a source that is not a recording at all rejects.
  */
 export async function buildIndex(sources: readonly SegmentSource[], options: IndexOptions): Promise<TimelineIndex> {
     const warnings: string[] = []
     const files = await Promise.all(sources.map(readSource))
-    const segments = files.map(bytes => readSegment(bytes, warnings))
+    const segments = files.flatMap(bytes => readSegments(bytes, warnings))
     segments.sort((a, b) => a.header.segment - b.header.segment || a.header.startedAt - b.header.startedAt)
-    const first = segments[0]?.header
-    if (first === undefined) {
+    if (segments.length === 0) {
         throw new RangeError('no recording to load')
     }
-    for (const { header } of segments) {
-        if (header.sessionId !== first.sessionId) {
-            throw new RangeError(`segments of different sessions: ${first.sessionId} and ${header.sessionId}`)
+    const indexer = new Indexer(options, warnings)
+    for (const segment of segments) {
+        indexer.header(segment.header)
+        const chunks = segment.chunks.toSorted((a, b) => a.sequence - b.sequence)
+        // oxlint-disable-next-line no-await-in-loop -- segments are few, and their chunks decompress together
+        const payloads = await Promise.all(chunks.map(decompress))
+        for (const [i, chunk] of chunks.entries()) {
+            indexer.chunk(chunk, payloads[i])
         }
     }
-    const perSegment = await Promise.all(segments.map(segment => readFrames(segment, warnings)))
-
-    // Segments follow each other: one starts no earlier than the previous one ends, whatever the clocks say.
-    const frames: Frame[] = []
-    let end = 0
-    for (const [i, segment] of segments.entries()) {
-        const { frames: segmentFrames, end: segmentEnd } = perSegment[i]!
-        const offset = Math.max(segment.header.startedAt - first.startedAt, end)
-        for (const frame of segmentFrames) {
-            frame.time += offset
-            frames.push(frame)
-        }
-        end = Math.max(end, offset + segmentEnd)
-    }
-    const index = indexFrames(frames, options, warnings)
-    return {
-        sessionId: first.sessionId,
-        startedAt: first.startedAt,
-        meta: first.meta,
-        start: index.events.count > 0 ? index.events.times[0]! : 0,
-        end: Math.max(end, index.end),
-        events: index.events,
-        keyframes: await index.keyframes,
-        pointer: index.pointer,
-        statics: index.statics,
-        data: index.data,
-        warnings
-    }
+    indexer.finish()
+    return indexer.take()
 }
 
 async function readSource(source: SegmentSource): Promise<Uint8Array> {
@@ -105,80 +85,457 @@ async function readSource(source: SegmentSource): Promise<Uint8Array> {
     return 'arrayBuffer' in source ? new Uint8Array(await source.arrayBuffer()) : source
 }
 
-/** Reads a segment's header and as many whole chunks as there are. */
-function readSegment(bytes: Uint8Array, warnings: string[]): Segment {
+/** Reads the segments of a source, and as many whole chunks of each as there are. */
+function readSegments(bytes: Uint8Array, warnings: string[]): Segment[] {
     const reader = new ByteReader(bytes)
-    const header = readFileHeader(reader)
-    const chunks: Chunk[] = []
+    let segment: Segment = { header: readFileHeader(reader), chunks: [] }
+    const segments = [segment]
     while (reader.remaining > 0) {
         try {
-            chunks.push(readChunk(reader))
+            if (bytes[reader.offset] === MAGIC[0]) {
+                segment = { header: readFileHeader(reader), chunks: [] }
+                segments.push(segment)
+            } else {
+                segment.chunks.push(readChunk(reader))
+            }
         } catch (error) {
-            warnings.push(`segment ${header.segment} is cut short (${describe(error)}); its end is left out`)
+            warnings.push(`segment ${segment.header.segment} is cut short (${describe(error)}); its end is left out`)
             break
         }
     }
-    return { header, chunks }
+    return segments
 }
 
-/** A segment's events in replay order: by time, then track, each track in recording order. */
-async function readFrames(segment: Segment, warnings: string[]): Promise<{ frames: Frame[]; end: number }> {
-    const chunks = segment.chunks.filter(chunk => chunk.kind === ChunkKind.Events)
-    chunks.sort((a, b) => a.sequence - b.sequence)
-    const payloads = await Promise.all(
-        chunks.map(async chunk =>
-            chunk.flags & ChunkFlag.Gzip ? gunzip(chunk.payload).catch(() => undefined) : chunk.payload
-        )
-    )
-    const frames: Frame[] = []
-    let end = 0
-    for (const [i, chunk] of chunks.entries()) {
-        end = Math.max(end, chunk.startTime + chunk.duration)
-        const payload = payloads[i]
+/** A chunk's payload, decompressed; `undefined` when it is not valid gzip data. */
+async function decompress(chunk: Chunk): Promise<Uint8Array | undefined> {
+    return chunk.flags & ChunkFlag.Gzip ? gunzip(chunk.payload).catch(() => undefined) : chunk.payload
+}
+
+/** How often a stream's indexer hands on what it indexed, at most. */
+const STREAM_INTERVAL = 100
+
+/**
+ * Indexes recording bytes as they come, such as from a live recording: segments one after the other. Hands on
+ * what it indexed through `post`, a part at a time, in order; reports with `fail` when the bytes are no recording,
+ * after which it takes no more.
+ */
+export class StreamIndexer {
+    readonly #reader = new SegmentReader()
+    readonly #indexer: Indexer
+    readonly #post: (index: TimelineIndex) => void
+    readonly #fail: (error: unknown) => void
+    /** Indexing, one header or chunk after the other. */
+    #queue: Promise<void> = Promise.resolve()
+    /** Handing on, one part after the other. */
+    #posting: Promise<void> = Promise.resolve()
+    readonly #interval: number
+    #timer: ReturnType<typeof setTimeout> | undefined
+    #failed = false
+
+    /** `interval` is how long it waits, in milliseconds, before it hands on what it indexed. */
+    constructor(
+        options: IndexOptions,
+        post: (index: TimelineIndex) => void,
+        fail: (error: unknown) => void,
+        interval: number = STREAM_INTERVAL
+    ) {
+        this.#indexer = new Indexer(options, [])
+        this.#post = post
+        this.#fail = fail
+        this.#interval = interval
+    }
+
+    push(bytes: Uint8Array): void {
+        if (this.#failed) {
+            return
+        }
+        let items
+        try {
+            items = this.#reader.push(bytes)
+        } catch (error) {
+            this.#stop(error)
+            return
+        }
+        const indexer = this.#indexer
+        for (const { header, chunk } of items) {
+            if (header !== undefined) {
+                this.#enqueue(() => indexer.header(header))
+            } else {
+                // Decompression starts now, while earlier chunks are indexed.
+                const payload = decompress(chunk)
+                this.#enqueue(async () => indexer.chunk(chunk, await payload))
+            }
+        }
+        this.#schedule()
+    }
+
+    /** The bytes ended: what is held back is all there is. */
+    end(): void {
+        if (this.#failed) {
+            return
+        }
+        const pending = this.#reader.pending
+        this.#enqueue(() => {
+            if (!this.#indexer.started) {
+                throw new RangeError('no recording to load')
+            }
+            if (pending > 0) {
+                this.#indexer.warn(
+                    `the recording is cut short (${pending} bytes are no whole chunk); its end is left out`
+                )
+            }
+            this.#indexer.finish()
+        })
+        this.#schedule()
+    }
+
+    #enqueue(task: () => void | Promise<void>): void {
+        this.#queue = this.#queue.then(task).catch((error: unknown) => this.#stop(error))
+    }
+
+    #schedule(): void {
+        this.#timer ??= setTimeout(() => {
+            this.#timer = undefined
+            const indexed = this.#queue
+            this.#posting = this.#posting.then(() => this.#hand(indexed))
+        }, this.#interval)
+    }
+
+    /** Hands on what was indexed once `indexed` settles. */
+    async #hand(indexed: Promise<void>): Promise<void> {
+        await indexed
+        const indexer = this.#indexer
+        if (!this.#failed && indexer.started && indexer.changed) {
+            this.#post(await indexer.take())
+        }
+    }
+
+    #stop(error: unknown): void {
+        if (!this.#failed) {
+            this.#failed = true
+            clearTimeout(this.#timer)
+            this.#fail(error)
+        }
+    }
+}
+
+/** The segment being indexed. */
+interface OpenSegment {
+    header: FileHeader
+    /** Where its time 0 is on the timeline. */
+    offset: number
+    /** The latest sync point, on the timeline: page events before it are all there. */
+    sync: number
+    /** Page events not indexed yet, as they came. */
+    pending: Frame[]
+}
+
+/**
+ * Indexes the segments of a session, given one after the other, each header followed by its chunks in order.
+ * Page events wait until a sync chunk or the end of their segment says that no earlier one can come, then are
+ * indexed in replay order; other events are indexed as they come. `take` hands on what was indexed since it was
+ * last called.
+ */
+class Indexer {
+    readonly #options: IndexOptions
+    #warnings: string[]
+    #first: FileHeader | undefined
+    #segment: OpenSegment | undefined
+    /** Where the chunks read so far end, on the timeline: the next segment starts no earlier. */
+    #chunkEnd = 0
+    /** The latest event or pointer sample indexed. */
+    #lastTime = 0
+    /** How far the timeline is complete while more is to come. */
+    #edge = 0
+    #done = false
+    #changed = false
+    #start: number | undefined
+    readonly #document = new VirtualDocument()
+    readonly #ids: IdCounter = { next: 1 }
+    readonly #columns = new EventColumns()
+    #keyframes: Keyframe[] = []
+    #compressions: Promise<void>[] = []
+    #pointer = new PointerColumns()
+    #statics = new ByteWriter()
+    #data: Frame[] = []
+    #viewport: Keyframe['viewport']
+    /** DOM events cannot be applied until the next snapshot, because an earlier one is missing. */
+    #broken = false
+    #sinceKeyframe = 0
+
+    constructor(options: IndexOptions, warnings: string[]) {
+        this.#options = options
+        this.#warnings = warnings
+    }
+
+    /** Whether a segment started. */
+    get started(): boolean {
+        return this.#first !== undefined
+    }
+
+    /** Whether there is something to `take`. */
+    get changed(): boolean {
+        return this.#changed || this.#warnings.length > 0
+    }
+
+    warn(warning: string): void {
+        this.#warnings.push(warning)
+    }
+
+    /** Ends the segment so far and starts the next. Segments follow each other, whatever the clocks say. */
+    header(header: FileHeader): void {
+        const first = (this.#first ??= header)
+        if (header.sessionId !== first.sessionId) {
+            throw new RangeError(`segments of different sessions: ${first.sessionId} and ${header.sessionId}`)
+        }
+        this.#endSegment()
+        const offset = Math.max(header.startedAt - first.startedAt, this.#chunkEnd)
+        this.#segment = { header, offset, sync: offset, pending: [] }
+        this.#moveEdge(offset)
+    }
+
+    /** Takes a chunk of the current segment, with its payload decompressed, or `undefined` where that failed. */
+    chunk(chunk: Chunk, payload: Uint8Array | undefined): void {
+        const segment = this.#segment
+        if (segment === undefined) {
+            return
+        }
+        const { offset } = segment
+        if (chunk.kind === ChunkKind.Sync) {
+            segment.sync = Math.max(segment.sync, offset + chunk.startTime)
+            this.#release(segment, segment.sync)
+            this.#moveEdge(segment.sync)
+            return
+        }
+        if (chunk.kind !== ChunkKind.Events) {
+            return
+        }
+        this.#chunkEnd = Math.max(this.#chunkEnd, offset + chunk.startTime + chunk.duration)
+        let frames
         try {
             if (payload === undefined) {
                 throw new Error('its payload is not valid gzip data')
             }
-            for (const frame of readEventFrames(payload, chunk.startTime)) {
-                frames.push({ track: chunk.track, ...frame })
-            }
+            frames = readEventFrames(payload, chunk.startTime)
         } catch (error) {
-            warnings.push(
+            this.#warnings.push(
                 `chunk ${chunk.sequence} of segment ${segment.header.segment} cannot be read (${describe(error)}); ` +
                     'its events are left out'
             )
             if (chunk.track === Track.Dom) {
-                frames.push({ track: Track.Dom, type: GAP, time: chunk.startTime, body: EMPTY })
+                segment.pending.push({ track: Track.Dom, type: GAP, time: offset + chunk.startTime, body: EMPTY })
+            }
+            return
+        }
+        const page = chunk.track < Track.Console
+        for (const { type, time, body } of frames) {
+            const frame = { track: chunk.track, type, time: offset + time, body }
+            if (page) {
+                // A page event before the sync point broke its promise; it is taken as coming at it.
+                frame.time = Math.max(frame.time, segment.sync)
+                segment.pending.push(frame)
+            } else {
+                // Order does not matter for these: they hold for the whole recording, or are kept in time order.
+                this.#index(frame, { next: 0 })
             }
         }
     }
-    // Stable, so each track keeps its order.
-    frames.sort((a, b) => a.time - b.time || a.track - b.track)
-    return { frames, end }
+
+    /** No more is to come: indexes what waits. */
+    finish(): void {
+        this.#endSegment()
+        this.#done = true
+        this.#changed = true
+    }
+
+    /** What was indexed since the last call. */
+    async take(): Promise<TimelineIndex> {
+        const first = this.#first
+        if (first === undefined) {
+            throw new RangeError('no recording to load')
+        }
+        // Everything is taken now; only the keyframes' compression is awaited.
+        const keyframes = this.#keyframes
+        const compressions = this.#compressions
+        const data = new ByteWriter()
+        let dataTime = 0
+        // Stable, so events of a track keep their order.
+        for (const { type, time, body } of this.#data.toSorted((a, b) => a.time - b.time || a.track - b.track)) {
+            writeEventFrame(data, type, time - dataTime, body)
+            dataTime = time
+        }
+        const index: TimelineIndex = {
+            sessionId: first.sessionId,
+            startedAt: first.startedAt,
+            meta: first.meta,
+            start: this.#start ?? 0,
+            end: this.#done ? Math.max(this.#chunkEnd, this.#lastTime) : this.#edge,
+            done: this.#done,
+            events: this.#columns.take(),
+            keyframes,
+            pointer: this.#pointer.finish(),
+            statics: this.#statics.finish(),
+            data: data.finish(),
+            warnings: this.#warnings
+        }
+        this.#keyframes = []
+        this.#compressions = []
+        this.#pointer = new PointerColumns()
+        this.#statics = new ByteWriter()
+        this.#data = []
+        this.#warnings = []
+        this.#changed = false
+        await Promise.all(compressions)
+        return index
+    }
+
+    #moveEdge(time: number): void {
+        if (time > this.#edge) {
+            this.#edge = time
+            this.#changed = true
+        }
+    }
+
+    #endSegment(): void {
+        const segment = this.#segment
+        if (segment !== undefined) {
+            this.#release(segment, Infinity)
+            this.#moveEdge(Math.max(this.#chunkEnd, this.#lastTime))
+        }
+    }
+
+    /** Indexes the pending events of `segment` before `time`, in replay order: by time, then track. */
+    #release(segment: OpenSegment, time: number): void {
+        // Stable, so each track keeps its order.
+        const pending = segment.pending.toSorted((a, b) => a.time - b.time || a.track - b.track)
+        let count = 0
+        while (count < pending.length && pending[count]!.time < time) {
+            this.#index(pending[count]!, this.#ids)
+            count++
+        }
+        segment.pending = count === 0 ? pending : pending.slice(count)
+    }
+
+    #index(frame: Frame, ids: IdCounter): void {
+        const { type, time, body } = frame
+        this.#lastTime = Math.max(this.#lastTime, time)
+        this.#changed = true
+        if (type === GAP) {
+            this.#broken = true
+            return
+        }
+        const idBase = ids.next
+        let event: TcrEvent | undefined
+        try {
+            event = decodeEvent(type, body, ids)
+        } catch (error) {
+            this.#warnings.push(`an event at ${time} ms cannot be read (${describe(error)}); it is left out`)
+            this.#broken ||= type === EventType.Snapshot || type === EventType.Mutations
+            return
+        }
+        if (event === undefined) {
+            return
+        }
+        if (event.type === EventType.PointerMoves || event.type === EventType.PointerButton) {
+            this.#lastTime = Math.max(this.#lastTime, this.#pointer.add(event, time))
+            return
+        }
+        if (STATIC_TYPES.has(type)) {
+            writeEventFrame(this.#statics, type, 0, body)
+            return
+        }
+        if (DATA_TYPES.has(type)) {
+            this.#data.push(frame)
+            return
+        }
+        if (ids !== this.#ids) {
+            // A page event on a track of another kind, which the replay has no place for.
+            return
+        }
+        if (event.type === EventType.Snapshot) {
+            this.#broken = false
+        } else if (this.#broken && event.type === EventType.Mutations) {
+            return
+        }
+        const document = this.#document
+        const cost = document.apply(event)
+        const columns = this.#columns
+        columns.push(time, type, idBase, body, cost)
+        this.#start ??= time
+        if (event.type === EventType.Viewport) {
+            this.#viewport = { width: event.width, height: event.height }
+        }
+        if (event.type === EventType.Snapshot) {
+            this.#sinceKeyframe = 0
+            this.#keyframes.push({
+                index: columns.total,
+                time,
+                cost,
+                viewport: this.#viewport,
+                recorded: true,
+                snapshot: EMPTY,
+                input: EMPTY,
+                scroll: EMPTY,
+                styles: EMPTY
+            })
+            return
+        }
+        this.#sinceKeyframe += cost
+        // Seeking from a keyframe costs about its size, then the events after it: half the document size in
+        // events keeps the two in balance.
+        if (this.#sinceKeyframe < Math.max(this.#options.keyframeInterval, document.size / 2)) {
+            return
+        }
+        const state = document.encode(ids.next)
+        if (state === undefined) {
+            return
+        }
+        this.#sinceKeyframe = 0
+        const keyframe: Keyframe = {
+            index: columns.total,
+            time,
+            cost: document.size + state.rules,
+            viewport: this.#viewport,
+            recorded: false,
+            snapshot: EMPTY,
+            input: state.input,
+            scroll: state.scroll,
+            styles: EMPTY
+        }
+        this.#keyframes.push(keyframe)
+        this.#compressions.push(compress(keyframe, state.snapshot, state.styles))
+    }
 }
 
-/** Collects the column arrays of the index while events are read. */
+/** Collects the column arrays of the index while events are read, a part at a time. */
 class EventColumns {
-    count = 0
+    /** Events in the parts taken before. */
+    #before = 0
     #times: number[] = []
     #types: number[] = []
     #idBases: number[] = []
     #bodies: Uint8Array[] = []
+    /** Work of the events before, then summed after each event of this part. */
     #costs: number[] = [0]
     #size = 0
+
+    /** Events so far, those taken before included. */
+    get total(): number {
+        return this.#before + this.#times.length
+    }
 
     push(time: number, type: number, idBase: number, body: Uint8Array, cost: number): void {
         this.#times.push(time)
         this.#types.push(type)
         this.#idBases.push(idBase)
         this.#bodies.push(body)
-        this.#costs.push(this.#costs[this.count]! + cost)
+        this.#costs.push(this.#costs[this.#costs.length - 1]! + cost)
         this.#size += body.length
-        this.count++
     }
 
-    finish(): TimelineIndex['events'] {
-        const count = this.count
+    /** The part so far; the next starts empty. */
+    take(): TimelineIndex['events'] {
+        const count = this.#times.length
         const offsets = new Uint32Array(count)
         const lengths = new Uint32Array(count)
         const bodies = new Uint8Array(this.#size)
@@ -189,7 +546,8 @@ class EventColumns {
             bodies.set(body, offset)
             offset += body.length
         }
-        return {
+        const costs = this.#costs
+        const table = {
             count,
             times: Float64Array.from(this.#times),
             types: Uint8Array.from(this.#types),
@@ -197,115 +555,16 @@ class EventColumns {
             offsets,
             lengths,
             bodies,
-            costs: Float64Array.from(this.#costs)
+            costs: Float64Array.from(costs)
         }
-    }
-}
-
-function indexFrames(frames: readonly Frame[], options: IndexOptions, warnings: string[]) {
-    const columns = new EventColumns()
-    const document = new VirtualDocument()
-    const keyframes: Keyframe[] = []
-    const compressions: Promise<void>[] = []
-    const ids: IdCounter = { next: 1 }
-    const pointer = new PointerColumns()
-    const statics = new ByteWriter()
-    const data = new ByteWriter()
-    let dataTime = 0
-    let viewport: Keyframe['viewport']
-    /** DOM events cannot be applied until the next snapshot, because an earlier one is missing. */
-    let broken = false
-    let sinceKeyframe = 0
-    let end = 0
-    for (const frame of frames) {
-        const { type, time, body } = frame
-        end = Math.max(end, time)
-        if (type === GAP) {
-            broken = true
-            continue
-        }
-        const idBase = ids.next
-        let event: TcrEvent | undefined
-        try {
-            event = decodeEvent(type, body, ids)
-        } catch (error) {
-            warnings.push(`an event at ${time} ms cannot be read (${describe(error)}); it is left out`)
-            broken ||= type === EventType.Snapshot || type === EventType.Mutations
-            continue
-        }
-        if (event === undefined) {
-            continue
-        }
-        if (event.type === EventType.PointerMoves || event.type === EventType.PointerButton) {
-            end = Math.max(end, pointer.add(event, time))
-            continue
-        }
-        if (STATIC_TYPES.has(type)) {
-            writeEventFrame(statics, type, 0, body)
-            continue
-        }
-        if (DATA_TYPES.has(type)) {
-            writeEventFrame(data, type, time - dataTime, body)
-            dataTime = time
-            continue
-        }
-        if (event.type === EventType.Snapshot) {
-            broken = false
-        } else if (broken && event.type === EventType.Mutations) {
-            continue
-        }
-        const cost = document.apply(event)
-        columns.push(time, type, idBase, body, cost)
-        if (event.type === EventType.Viewport) {
-            viewport = { width: event.width, height: event.height }
-        }
-        if (event.type === EventType.Snapshot) {
-            sinceKeyframe = 0
-            keyframes.push({
-                index: columns.count,
-                time,
-                cost,
-                viewport,
-                recorded: true,
-                snapshot: EMPTY,
-                input: EMPTY,
-                scroll: EMPTY,
-                styles: EMPTY
-            })
-            continue
-        }
-        sinceKeyframe += cost
-        // Seeking from a keyframe costs about its size, then the events after it: half the document size in
-        // events keeps the two in balance.
-        if (sinceKeyframe < Math.max(options.keyframeInterval, document.size / 2)) {
-            continue
-        }
-        const state = document.encode(ids.next)
-        if (state === undefined) {
-            continue
-        }
-        sinceKeyframe = 0
-        const keyframe: Keyframe = {
-            index: columns.count,
-            time,
-            cost: document.size + state.rules,
-            viewport,
-            recorded: false,
-            snapshot: EMPTY,
-            input: state.input,
-            scroll: state.scroll,
-            styles: EMPTY
-        }
-        keyframes.push(keyframe)
-        compressions.push(compress(keyframe, state.snapshot, state.styles))
-    }
-    return {
-        events: columns.finish(),
-        keyframes: Promise.all(compressions).then(() => keyframes),
-        pointer: pointer.finish(),
-        statics: statics.finish(),
-        data: data.finish(),
-        end
+        this.#before += count
+        this.#times = []
+        this.#types = []
+        this.#idBases = []
+        this.#bodies = []
+        this.#costs = [costs[costs.length - 1]!]
+        this.#size = 0
+        return table
     }
 }
 

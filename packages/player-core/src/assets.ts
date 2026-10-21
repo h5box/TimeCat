@@ -9,27 +9,32 @@ export class Assets {
     /** Recorded URL to the replay's. */
     readonly #urls = new Map<string, string>()
     readonly #fonts: FontFaceEvent[] = []
-    readonly #faces = new WeakMap<Document, FontFace[]>()
+    /** The faces made for each document, and of how many fonts. */
+    readonly #faces = new WeakMap<Document, { fonts: number; faces: FontFace[] }>()
     /** Matches the recorded URLs, longest first. */
-    readonly #pattern: RegExp | undefined
+    #pattern: RegExp | undefined
     /** What every recorded URL starts with, which most texts lack. */
-    readonly #prefix: string
+    #prefix = ''
 
-    /** Takes the FontFace and Asset events of a recording; others are left out. */
-    constructor(events: Iterable<TcrEvent>) {
+    /** Takes the FontFace and Asset events of a recording, which may come a part at a time; others are left out. */
+    add(events: Iterable<TcrEvent>): void {
+        let added = false
         for (const event of events) {
             if (event.type === EventType.Asset) {
                 if (!this.#urls.has(event.url)) {
                     const blob = new Blob([event.data.slice()], { type: event.mimeType })
                     this.#urls.set(event.url, URL.createObjectURL(blob))
+                    added = true
                 }
             } else if (event.type === EventType.FontFace) {
                 this.#fonts.push(event)
             }
         }
-        const urls = [...this.#urls.keys()].toSorted((a, b) => b.length - a.length)
-        this.#pattern = urls.length === 0 ? undefined : new RegExp(urls.map(escape).join('|'), 'g')
-        this.#prefix = urls.reduce(commonPrefix, urls[0] ?? '')
+        if (added) {
+            const urls = [...this.#urls.keys()].toSorted((a, b) => b.length - a.length)
+            this.#pattern = new RegExp(urls.map(escape).join('|'), 'g')
+            this.#prefix = urls.reduce(commonPrefix, urls[0] ?? '')
+        }
     }
 
     /** `text` with the recorded URLs in it replaced by the replay's. */
@@ -47,18 +52,19 @@ export class Assets {
         if (this.#fonts.length === 0 || view === null) {
             return
         }
-        let faces = this.#faces.get(document)
-        if (faces === undefined) {
-            faces = []
-            for (const font of this.#fonts) {
-                const face = this.#face(view, font)
-                if (face !== undefined) {
-                    faces.push(face)
-                }
-            }
-            this.#faces.set(document, faces)
+        let made = this.#faces.get(document)
+        if (made === undefined) {
+            made = { fonts: 0, faces: [] }
+            this.#faces.set(document, made)
         }
-        for (const face of faces) {
+        for (const font of this.#fonts.slice(made.fonts)) {
+            const face = this.#face(view, font)
+            if (face !== undefined) {
+                made.faces.push(face)
+            }
+        }
+        made.fonts = this.#fonts.length
+        for (const face of made.faces) {
             if (!document.fonts.has(face)) {
                 document.fonts.add(face)
             }

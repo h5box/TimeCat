@@ -1,6 +1,7 @@
 /**
- * What the indexer hands the player: every event in replay order with its body still encoded, the keyframes to
- * seek from and the pointer trail. Made of typed arrays, so it moves from the worker without a copy.
+ * What the indexer hands the player: events in replay order with their bodies still encoded, the keyframes to seek
+ * from and the pointer trail. Made of typed arrays, so it moves from the worker without a copy. A recording that
+ * is still coming is handed on a part at a time: each part holds what was indexed since the previous one.
  */
 export interface TimelineIndex {
     sessionId: string
@@ -8,10 +9,13 @@ export interface TimelineIndex {
     startedAt: number
     /** Metadata of the first segment's header. */
     meta: Record<string, unknown>
-    /** Time of the first event, where playback starts. */
+    /** Time of the first event, where playback starts; 0 while there is none. */
     start: number
-    /** Time of the last thing recorded. */
+    /** Time of the last thing recorded; while more is to come, how far the timeline is complete. */
     end: number
+    /** Nothing more is to come. */
+    done: boolean
+    /** The events of this part, after those of the parts before. */
     events: EventTable
     keyframes: Keyframe[]
     pointer: PointerTrail
@@ -43,11 +47,14 @@ interface EventTable {
     lengths: Uint32Array<ArrayBuffer>
     /** Every body, back to back. */
     bodies: Uint8Array<ArrayBuffer>
-    /** Work of applying the events before each one, summed: `costs[j] - costs[i]` is the work of events i..j-1. */
+    /**
+     * Work of applying the events before each one, summed: `costs[j] - costs[i]` is the work of events i..j-1. One
+     * more than `count`: the first is the work of the events of the parts before.
+     */
     costs: Float64Array<ArrayBuffer>
 }
 
-/** A state seeking can start from: what applying the first `index` events produces. */
+/** A state seeking can start from: what applying the first `index` events of the timeline produces. */
 export interface Keyframe {
     index: number
     time: number

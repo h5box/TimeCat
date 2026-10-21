@@ -141,6 +141,29 @@ export function writeRecording(
     return writer.finish()
 }
 
+/** The chunks `writeRecording` writes, without the header, as a stream goes on after it. */
+export function writeChunks(events: readonly Timed[], firstSequence: number): Uint8Array<ArrayBuffer> {
+    return writeRecording(events, {}, firstSequence).slice(writeRecording([]).length)
+}
+
+/** A sync chunk: page events after it come at `time` or later. */
+export function writeSync(time: number, sequence: number): Uint8Array<ArrayBuffer> {
+    const writer = new ByteWriter()
+    const payload = new Uint8Array(0)
+    writeChunk(writer, { kind: ChunkKind.Sync, track: 0, flags: 0, sequence, startTime: time, duration: 0, payload })
+    return writer.finish()
+}
+
+export function concat(...parts: readonly Uint8Array[]): Uint8Array<ArrayBuffer> {
+    const bytes = new Uint8Array(parts.reduce((length, part) => length + part.length, 0))
+    let offset = 0
+    for (const part of parts) {
+        bytes.set(part, offset)
+        offset += part.length
+    }
+    return bytes
+}
+
 /** One line per node, indented by depth, with sorted attributes, so trees compare as text. */
 export function describeTree(root: SerializedNode): string {
     const lines: string[] = []

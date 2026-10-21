@@ -23,6 +23,22 @@ player.destroy()
 The replay fills the container, scaled to fit with the recorded proportions. A container without a height of its
 own takes the proportions of the recorded viewport.
 
+### Live playback
+
+A `ReadableStream` of recording bytes plays as it comes, such as a stream the recorder's `onData` feeds through a
+WebSocket or a `fetch` response: segments one after the other, like the files of a session.
+
+```ts
+const response = await fetch('/sessions/42/live')
+const player = await createPlayer(response.body!, { container, autoplay: true })
+player.addEventListener('durationchange', () => console.log(player.live, player.duration))
+```
+
+The player is ready once the stream gave something to show, and starts at its edge: the latest time up to which
+everything is known, which the recorder's sync points move on every `latency` milliseconds. While `live`,
+`duration` grows; playing on at the edge waits for more rather than ending. Once the stream ends, the player is no
+longer live, and plays what came like a recording. A stream that fails ends there: its error goes to `onError`.
+
 ### Options
 
 | Option | Default | Meaning |
@@ -35,7 +51,8 @@ own takes the proportions of the recorded viewport.
 | `onError` | logs | Receives errors playback goes on after, such as an event that does not apply. |
 
 `createPlayer` rejects with a `TcrDecodeError` (exported from this package) when a source is not a recording it can
-read, and with a `RangeError` when segments of different sessions are mixed. A recording that was cut off plays up
+read, with a `RangeError` when segments of different sessions are mixed, and with the error of a stream that failed
+before it gave anything to show. A recording that was cut off plays up
 to where it ends, and `player.warnings` says what was left out.
 
 ### Player
@@ -44,22 +61,27 @@ to where it ends, and `player.warnings` says what was left out.
 | --- | --- |
 | `sessionId`, `startedAt`, `meta` | From the recording's header. `startedAt` is in epoch milliseconds. |
 | `duration`, `currentTime` | In milliseconds from the first recorded event. |
+| `live` | More of the recording is to come, from a stream. |
 | `paused`, `speed` | Playback state; `speed` can be changed while playing. |
-| `play()`, `pause()` | Play from the current time, or from the start once ended. |
+| `play()`, `pause()` | Play from the current time, or from the start once ended; while live, at the edge, wait for more. |
 | `seek(time)` | Resolves once the replay shows `time`, or a later time asked for meanwhile. |
 | `document` | The replayed document, to look at. Changing it breaks the replay. |
 | `events` | What was recorded beside the page, in time order: console messages, requests and performance measurements of the plugins, and the events of the application. Each is `{ time, event }`, with `time` on the clock of `currentTime`; `event.type` is one of `EventType.Console`, `Network`, `Perf` and `Custom`, which this package exports. |
 | `warnings` | Problems the recording was read despite. |
 | `destroy()` | Stops playing and removes the replay from its container. |
 
-It dispatches `play`, `pause`, `ended` and `timeupdate` (while playing and after each seek).
+It dispatches `play`, `pause`, `ended`, `timeupdate` (while playing and after each seek) and `durationchange` (when
+more of a live recording came, and when it ended).
 
 ## How it works
 
 **Indexing.** A worker decompresses the recording's chunks, puts the events of all tracks and segments in one
 timeline and returns it as transferable typed arrays: times, types, byte ranges of the event bodies and the cost of
 applying each event. Segments play one after the other, at the offset their clocks give or after the previous one,
-whichever is later. Pointer movement is kept apart, as columns the cursor is read from at any time.
+whichever is later. Pointer movement is kept apart, as columns the cursor is read from at any time. A stream is
+indexed as it comes and handed on a part at a time, at most every 100 ms, which the player's timeline adds to its
+columns. Since the tracks of a page end their chunks at different times, page events wait in the worker until a sync
+chunk, or the end of their segment, says that no earlier one can come; then they are put in order.
 
 **Keyframes.** While indexing, the worker applies the events to a plain-data model of the document. Once the events
 since the last keyframe take enough work, it writes the model's state as a keyframe: a compressed snapshot that

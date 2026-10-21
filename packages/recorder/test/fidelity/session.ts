@@ -128,6 +128,12 @@ export class Session {
         this.#capture.flush(true)
     }
 
+    /** Writes a sync point, as a live recording does now and then. */
+    sync(): void {
+        this.flush()
+        this.#capture.sync()
+    }
+
     /** Flushes, notes what the page shows, and moves the clock on so that later changes come after. */
     checkpoint(): void {
         this.flush()
@@ -171,20 +177,30 @@ export type Describe = (document: Document) => string | Promise<string>
 
 /**
  * Plays a recording, seeks to the times given, in their order, and describes what the replay shows at each.
- * Small keyframe intervals make seeks go through keyframes the player wrote itself.
+ * Small keyframe intervals make seeks go through keyframes the player wrote itself. With `stream`, the player
+ * reads the recording as a live stream, in pieces, and the seeks wait until it ended.
  */
 export async function replay(
     recording: Uint8Array,
     times: readonly number[],
     keyframeInterval: number,
-    describe: Describe = describePage
+    describe: Describe = describePage,
+    stream = false
 ): Promise<string[]> {
     const container = document.createElement('div')
     container.style.cssText = 'width: 320px; height: 240px'
     document.body.append(container)
     const errors: unknown[] = []
-    const player = await createPlayer(recording, { container, keyframeInterval, onError: error => errors.push(error) })
+    const player = await createPlayer(stream ? streamOf(recording) : recording, {
+        container,
+        keyframeInterval,
+        onError: error => errors.push(error)
+    })
     try {
+        while (player.live) {
+            // oxlint-disable-next-line no-await-in-loop -- the stream comes a part at a time
+            await new Promise(resolve => player.addEventListener('durationchange', resolve, { once: true }))
+        }
         const states: string[] = []
         for (const time of times) {
             // oxlint-disable-next-line no-await-in-loop -- each seek starts where the last one ended
@@ -200,6 +216,23 @@ export async function replay(
         player.destroy()
         container.remove()
     }
+}
+
+/** The bytes of a recording as a stream gives them, in pieces of a few sizes, one task after the other. */
+function streamOf(recording: Uint8Array): ReadableStream<Uint8Array> {
+    let offset = 0
+    let piece = 0
+    return new ReadableStream({
+        async pull(controller) {
+            await new Promise(resolve => setTimeout(resolve, 0))
+            const size = [1, 100, 4000][piece++ % 3]!
+            controller.enqueue(recording.slice(offset, offset + size))
+            offset += size
+            if (offset >= recording.length) {
+                controller.close()
+            }
+        }
+    })
 }
 
 function concat(parts: readonly Uint8Array[]): Uint8Array<ArrayBuffer> {
