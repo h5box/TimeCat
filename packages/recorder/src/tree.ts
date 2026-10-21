@@ -78,8 +78,9 @@ export class TreeWriter {
     }
 
     /**
-     * Writes the open subtree. `shouldYield` is asked every `checkEvery` nodes; once it returns true, the walk
-     * stops and returns false, and the next call continues it. Returns true when the subtree is complete.
+     * Writes the open subtree. `shouldYield` is asked every `checkEvery` steps, never before the first, so that
+     * every call gets on; once it returns true, the walk stops and returns false, and the next call continues
+     * it. Returns true when the subtree is complete.
      */
     run(shouldYield?: () => boolean, checkEvery = 64): boolean {
         const frames = this.#frames
@@ -87,12 +88,13 @@ export class TreeWriter {
         const ids = this.#ids
         let count = 0
         while (frames.length > 0) {
-            if (shouldYield !== undefined && ++count >= checkEvery) {
+            if (shouldYield !== undefined && count >= checkEvery) {
                 count = 0
                 if (shouldYield()) {
                     return false
                 }
             }
+            count++
             const frame = frames[frames.length - 1]!
             if (guard !== undefined && frame.checked !== guard.generation) {
                 this.#check(frame, guard)

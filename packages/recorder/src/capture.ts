@@ -1,6 +1,16 @@
 import { ByteWriter, encodeEvent, EventType, EventWriter, PointerAction, Track } from '@timecat-js/protocol'
 import type { EventSink } from './batch.ts'
-import { HTML_NAMESPACE, isForm, isNode, isOptGroup, isOption, isPointerEvent, isSelect } from './dom.ts'
+import {
+    HTML_NAMESPACE,
+    isForm,
+    isInput,
+    isNode,
+    isOptGroup,
+    isOption,
+    isPointerEvent,
+    isSelect,
+    isTextArea
+} from './dom.ts'
 import { NodeIds } from './ids.ts'
 import { hookFormSetters, InputRecorder } from './inputs.ts'
 import { MutationBuffer, MutationWriter } from './mutations.ts'
@@ -251,7 +261,7 @@ export class Capture implements EventListenerObject {
             buffer.push(this.#observer.takeRecords())
             if (!buffer.isEmpty) {
                 try {
-                    this.#markSelections(buffer)
+                    this.#markControls(buffer)
                     const body = this.#mutations.write(buffer)
                     if (body !== undefined) {
                         sink.event(Track.Dom, EventType.Mutations, time, body)
@@ -291,17 +301,35 @@ export class Capture implements EventListenerObject {
         }
     }
 
-    /** Changes to options can change what a `<select>` has selected, which fires no event. */
-    #markSelections(buffer: MutationBuffer): void {
+    /**
+     * Marks controls whose state may have changed without an event, here or in the replay, which makes the same
+     * changes to their markup. Changes to options can change what a `<select>` has selected. Until the user
+     * changes a control, or after its form is reset, its value follows its default: the `value` attribute, the
+     * `checked` attribute, the text of a `<textarea>`. The replay sets the state of controls it was recorded
+     * for, after which it no longer follows the default, so the recording has to say when the state changes
+     * this way.
+     */
+    #markControls(buffer: MutationBuffer): void {
         const inputs = this.#inputs
         for (const parent of buffer.parents) {
-            if (isSelect(parent) || isOptGroup(parent)) {
-                inputs.mark(parent)
+            if (isSelect(parent) || isOptGroup(parent) || isTextArea(parent)) {
+                inputs.invalidate(parent)
             }
         }
-        for (const element of buffer.attributes.keys()) {
-            if (isSelect(element) || isOptGroup(element) || isOption(element)) {
-                inputs.mark(element)
+        for (const [element, names] of buffer.attributes) {
+            if (
+                isSelect(element) ||
+                isOptGroup(element) ||
+                isOption(element) ||
+                (isInput(element) && (names.has('value') || names.has('checked') || names.has('type')))
+            ) {
+                inputs.invalidate(element)
+            }
+        }
+        for (const node of buffer.texts) {
+            const parent = node.parentNode
+            if (parent !== null && isTextArea(parent)) {
+                inputs.invalidate(parent)
             }
         }
     }
@@ -347,7 +375,8 @@ export class Capture implements EventListenerObject {
     }
 
     readonly #onFormSet = (node: Node): void => {
-        if (!this.#stopped) {
+        // The hooked setters serve every document of their realm.
+        if (!this.#stopped && node.ownerDocument === this.#document) {
             this.#inputs.mark(node)
             this.#requestFlush()
         }

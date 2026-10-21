@@ -27,8 +27,21 @@ export class InputRecorder {
      * `<select>`.
      */
     mark(node: Node): void {
-        const control = isOption(node) || isOptGroup(node) ? node.closest('select') : node
-        if (control !== null && isFormControl(control)) {
+        const control = controlOf(node)
+        if (control !== undefined) {
+            this.#marked.add(control)
+        }
+    }
+
+    /**
+     * Marks the control `node` belongs to after its markup changed. The replay makes the same change, which can
+     * change the control's state there, as an inserted option that is selected by default does: the state is
+     * written even when it is what was recorded last.
+     */
+    invalidate(node: Node): void {
+        const control = controlOf(node)
+        if (control !== undefined) {
+            this.#last.delete(control)
             this.#marked.add(control)
         }
     }
@@ -114,6 +127,11 @@ export class InputRecorder {
     }
 }
 
+function controlOf(node: Node): FormControl | undefined {
+    const control = isOption(node) || isOptGroup(node) ? node.closest('select') : node
+    return control !== null && isFormControl(control) ? control : undefined
+}
+
 function differsFromMarkup(control: FormControl): boolean {
     if (isCheckable(control)) {
         return control.checked !== control.defaultChecked
@@ -139,14 +157,23 @@ const SETTERS: [tag: string, properties: string[]][] = [
 
 /**
  * Wraps the setters that change form state, so script changes are seen too. Hooks the prototypes of the realm
- * `document` belongs to. Returns a function that removes the hooks.
+ * `document` belongs to, and of the realm this code runs in when that is another one: Chromium gives a node the
+ * wrapper of the realm that first reaches it, which for nodes added later is the realm of the mutation
+ * observer. Returns a function that removes the hooks.
  */
 export function hookFormSetters(document: Document, onSet: (node: Node) => void): () => void {
     const removers: (() => void)[] = []
+    const prototypes = new Set<object>()
     for (const [tag, properties] of SETTERS) {
-        const prototype: object = Object.getPrototypeOf(document.createElement(tag))
-        for (const property of properties) {
-            removers.push(hookSetter(prototype, property, onSet))
+        for (const owner of [document, globalThis.document]) {
+            const prototype: object = Object.getPrototypeOf(owner.createElement(tag))
+            if (prototypes.has(prototype)) {
+                continue
+            }
+            prototypes.add(prototype)
+            for (const property of properties) {
+                removers.push(hookSetter(prototype, property, onSet))
+            }
         }
     }
     return () => {
