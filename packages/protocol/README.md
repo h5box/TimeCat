@@ -14,10 +14,12 @@ shared by the recorder, the player and any tooling that reads recordings.
 | `StringTableWriter` / `StringTableReader` | Writes repeated strings once and references them afterwards. The writer decides what to intern; the reader follows the tags. |
 | `writeFileHeader` / `readFileHeader` | Segment header: magic bytes, format version, session id, segment index, start time and JSON metadata. |
 | `writeChunk` / `readChunk` / `readFile` | Chunk framing: kind, flags, track, sequence, time range and payload. |
+| `SegmentReader` | Reads headers and chunks from bytes that come in pieces, such as a live stream, where several segments can follow each other. |
 | `gzip` / `gunzip` | Compression through the platform `CompressionStream`, so it adds no bundle weight. |
-| `encodeEvent` / `decodeEvent` | Event bodies: DOM snapshots and mutations (shadow roots and frame documents included), input, pointer, scroll, viewport, navigation, CSSOM style sheets, fonts, assets, and the console, network, performance and custom events of plugins. Node ids are implied by document order, so decoding carries an `IdCounter` from event to event. |
+| `encodeEvent` / `decodeEvent` | Event bodies: DOM snapshots and mutations (shadow roots and frame documents included), input, pointer, scroll, viewport, navigation, CSSOM style sheets, fonts, assets, the console, network, performance and custom events of plugins, media track declarations and the playback state of media elements. Node ids are implied by document order, so decoding carries an `IdCounter` from event to event. |
 | `EventWriter` | Streaming encoder for event bodies. The recorder writes DOM trees through it while walking the page, without building objects first. |
 | `writeEventFrame` / `readEventFrames` | Event framing inside an events chunk: type, time delta and body. |
+| `writeMediaPacket` / `readMediaPackets` | Packet framing inside a media chunk: key flag, time and duration in microseconds, and data. |
 | `Track`, `ChunkKind`, `ChunkFlag`, `EventType`, `NodeKind`, … | Protocol constants. |
 
 ## Example

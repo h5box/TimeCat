@@ -7,6 +7,8 @@ export {
     encodeEvent,
     encodeFontFace,
     encodeInput,
+    encodeMediaState,
+    encodeMediaTrack,
     encodeMutations,
     encodeNavigation,
     encodeNetwork,
@@ -25,13 +27,14 @@ export {
     ChunkKind,
     FORMAT_VERSION,
     MAGIC,
+    SegmentReader,
     readChunk,
     readFile,
     readFileHeader,
     writeChunk,
     writeFileHeader
 } from './container.ts'
-export type { Chunk, FileHeader, SegmentInfo } from './container.ts'
+export type { Chunk, FileHeader, SegmentInfo, SegmentItem } from './container.ts'
 export { TcrDecodeError } from './errors.ts'
 export { EventWriter } from './event-writer.ts'
 export {
@@ -39,6 +42,7 @@ export {
     ConsoleSource,
     EventType,
     InputKind,
+    MediaKind,
     Namespace,
     NodeKind,
     PointerAction,
@@ -61,6 +65,8 @@ export type {
     FontFaceEvent,
     InputChange,
     InputEvent,
+    MediaStateEvent,
+    MediaTrackEvent,
     MutationsEvent,
     NavigationEvent,
     NetworkEvent,
@@ -81,6 +87,8 @@ export type {
 } from './events.ts'
 export { readEventFrames, writeEventFrame } from './frames.ts'
 export type { EventFrame } from './frames.ts'
+export { readMediaPackets, writeMediaPacket } from './media.ts'
+export type { MediaPacket } from './media.ts'
 export { ByteReader } from './reader.ts'
 export { StringTableReader, StringTableWriter } from './strings.ts'
 export { FIRST_DYNAMIC_TRACK, Track } from './tracks.ts'

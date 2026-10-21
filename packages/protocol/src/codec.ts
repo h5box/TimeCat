@@ -14,6 +14,7 @@ import {
     ConsoleSource,
     EventType,
     InputKind,
+    MediaKind,
     Namespace,
     NodeKind,
     PointerAction,
@@ -32,6 +33,8 @@ import type {
     FontFaceEvent,
     InputChange,
     InputEvent,
+    MediaStateEvent,
+    MediaTrackEvent,
     MutationsEvent,
     NavigationEvent,
     NetworkEvent,
@@ -49,11 +52,16 @@ import type {
 } from './events.ts'
 import { ByteReader } from './reader.ts'
 import { StringTableReader } from './strings.ts'
+import { FIRST_DYNAMIC_TRACK } from './tracks.ts'
 import { ByteWriter } from './writer.ts'
 
 // Font sources: a CSS `src` value, or the font file.
 const FONT_URL = 0
 const FONT_DATA = 1
+
+// Media state flags.
+const MEDIA_PAUSED = 1
+const MEDIA_MUTED = 2
 
 /**
  * Allocates implicit node ids while decoding. It carries over from event to event: a snapshot resets it, and
@@ -101,6 +109,10 @@ export function encodeEvent(event: TcrEvent): Uint8Array<ArrayBuffer> {
             return encodePerf(event)
         case EventType.Custom:
             return encodeCustom(event)
+        case EventType.MediaTrack:
+            return encodeMediaTrack(event)
+        case EventType.MediaState:
+            return encodeMediaState(event)
         default:
             throw new RangeError('unknown event type')
     }
@@ -309,6 +321,38 @@ export function encodeCustom(event: Omit<CustomDataEvent, 'type'>): Uint8Array<A
     return w.bytes.finish()
 }
 
+export function encodeMediaTrack(event: Omit<MediaTrackEvent, 'type'>): Uint8Array<ArrayBuffer> {
+    if (event.track < FIRST_DYNAMIC_TRACK) {
+        throw new RangeError(`media track ids start at ${FIRST_DYNAMIC_TRACK}, got ${event.track}`)
+    }
+    if ((event.codec === '') === (event.container === '')) {
+        throw new RangeError('a media track has either a codec or a container')
+    }
+    const w = new EventWriter(new ByteWriter(64 + event.description.length))
+    const bytes = w.bytes
+    bytes.varuint(event.track)
+    bytes.u8(event.kind)
+    bytes.varuint(event.targetId)
+    w.string(event.codec, false)
+    bytes.bytes(event.description)
+    w.string(event.container, false)
+    bytes.varuint(event.width)
+    bytes.varuint(event.height)
+    bytes.varuint(event.sampleRate)
+    bytes.varuint(event.channels)
+    return bytes.finish()
+}
+
+export function encodeMediaState(event: Omit<MediaStateEvent, 'type'>): Uint8Array<ArrayBuffer> {
+    const bytes = new ByteWriter(32)
+    bytes.varuint(event.id)
+    bytes.u8((event.paused ? MEDIA_PAUSED : 0) | (event.muted ? MEDIA_MUTED : 0))
+    bytes.f64(event.currentTime)
+    bytes.f64(event.playbackRate)
+    bytes.f64(event.volume)
+    return bytes.finish()
+}
+
 /**
  * Decodes an event body. Returns `undefined` for event types this reader does not know, which callers skip.
  * Bytes after the known fields are ignored, so later versions can append fields.
@@ -442,6 +486,52 @@ export function decodeEvent(type: number, body: Uint8Array, ids: IdCounter): Tcr
             return { type, metric: strings.read(r), value: r.f64(), targetId: r.varuint() }
         case EventType.Custom:
             return { type, name: strings.read(r), data: strings.read(r) }
+        case EventType.MediaTrack: {
+            const track = r.varuint()
+            if (track < FIRST_DYNAMIC_TRACK) {
+                throw new TcrDecodeError(`media track ${track} is below ${FIRST_DYNAMIC_TRACK}`)
+            }
+            const kind = r.u8()
+            if (!isValueOf(MediaKind, kind)) {
+                throw new TcrDecodeError(`unknown media kind ${kind}`)
+            }
+            const targetId = r.varuint()
+            const codec = strings.read(r)
+            const description = r.bytes()
+            const container = strings.read(r)
+            if ((codec === '') === (container === '')) {
+                throw new TcrDecodeError('a media track needs either a codec or a container')
+            }
+            return {
+                type,
+                track,
+                kind,
+                targetId,
+                codec,
+                description,
+                container,
+                width: r.varuint(),
+                height: r.varuint(),
+                sampleRate: r.varuint(),
+                channels: r.varuint()
+            }
+        }
+        case EventType.MediaState: {
+            const id = r.varuint()
+            const flags = r.u8()
+            if (flags & ~(MEDIA_PAUSED | MEDIA_MUTED)) {
+                throw new TcrDecodeError(`unknown media state flags 0x${flags.toString(16)}`)
+            }
+            return {
+                type,
+                id,
+                paused: (flags & MEDIA_PAUSED) !== 0,
+                muted: (flags & MEDIA_MUTED) !== 0,
+                currentTime: r.f64(),
+                playbackRate: r.f64(),
+                volume: r.f64()
+            }
+        }
         default:
             return undefined
     }

@@ -1,9 +1,9 @@
 # RFC 0002：TCR 录制格式 v0
 
-| 状态 | 草案。第 2–6 节均已实现 |
+| 状态 | 草案。第 2–7 节均已实现 |
 |---|---|
-| 日期 | 2026-10-20，2026-10-21 定稿第 6 节、补充第 4.3 节；M2 补充 Shadow DOM、frame、样式表、字体、资源和插件事件（第 6.4、6.13–6.20 节） |
-| 实现 | `@timecat-js/protocol`（`FORMAT_VERSION = 0`）；第 4.3 节的时间线由 `@timecat-js/player-core` 实现 |
+| 日期 | 2026-10-20，2026-10-21 定稿第 6 节、补充第 4.3 节；M2 补充 Shadow DOM、frame、样式表、字体、资源和插件事件（第 6.4、6.13–6.20 节）；M3 补充多段字节流、实时流和媒体（第 4、4.4、6.21–6.22、7 节） |
+| 实现 | `@timecat-js/protocol`（`FORMAT_VERSION = 0`）；第 4.3、4.4 节的时间线由 `@timecat-js/player-core` 实现 |
 | 背景 | [RFC 0001](./0001-timecat-next.md) 第 3.4 节 |
 
 TCR（TimeCat Recording）是 TimeCat 的录制数据格式。设计目标：
@@ -20,7 +20,7 @@ TCR（TimeCat Recording）是 TimeCat 的录制数据格式。设计目标：
 
 - "错误"指读取方必须中止解析，实现中抛出 `TcrDecodeError`。
 - 多字节数值只有 `f64` 一种，采用小端序。
-- 时间单位一律为毫秒。
+- 时间单位是毫秒，只有媒体包（第 7 节）用微秒。
 
 ## 2. 基本类型
 
@@ -55,11 +55,14 @@ TCR（TimeCat Recording）是 TimeCat 的录制数据格式。设计目标：
 
 ## 4. 段（segment）
 
-一次会话由一个或多个段组成，每次页面加载产生一个段。一个段就是一条字节流（一个文件，或一次流式上传）：
+一次会话由一个或多个段组成，每次页面加载产生一个段。一条字节流（一个文件，或一次流式传输）包含一个段，或者一个接一个的多个段：
 
 ```
+Stream  := Segment+
 Segment := Header Chunk*
 ```
+
+读取方在 chunk 的边界上读到字节 `54`（magic 的第一个字节）时，按 Header 读下一段。所以 chunk kind `0x54` 保留不用，读到是错误。
 
 ### 4.1 Header
 
@@ -77,7 +80,7 @@ Segment := Header Chunk*
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| kind | `u8` | 1 = 事件，2 = 媒体。读取方**跳过**不认识的 kind（负载有长度前缀，可以直接跳过） |
+| kind | `u8` | 1 = 事件（第 6 节），2 = 媒体（第 7 节），3 = 同步（第 4.4 节）。`0x54` 保留（见上文）。读取方**跳过**其他不认识的 kind（负载有长度前缀，可以直接跳过） |
 | flags | `u8` | bit 0 = 关键帧（不依赖同轨道更早的 chunk 即可解码）；bit 1 = 负载经 gzip 压缩；其余位保留，非 0 是错误 |
 | track | `varuint` | 轨道 ID（第 5 节） |
 | sequence | `varuint` | 段内序号，从 0 开始依次递增，用于排序和发现缺失 |
@@ -102,6 +105,19 @@ Segment := Header Chunk*
 
 `Dom` 轨道的某个 chunk 无法解码时（例如负载不是合法的 gzip 数据），它之后的变更引用的节点 ID 都无法确定。建议读取方给出警告，并在下一个快照之前不再应用 Mutations 事件；其他轨道的事件照常应用。
 
+### 4.4 实时流
+
+写入方按轨道攒 chunk，一个 chunk 结束时才写出，所以字节流里各轨道的 chunk 是交错的：一个轨道的 chunk 可能晚于另一个轨道上时间更晚的 chunk 写出。读完整个文件再排序的读取方不受影响；边收边播的读取方需要知道哪段时间已经完整，这由同步 chunk 说明。
+
+同步 chunk（kind 3）：`track` 为 0，`flags` 为 0，负载为空，`duration` 为 0，`sequence` 照常递增。它的 `startTime` 为 T，表示**页面轨道**（ID 小于 16 的固定轨道，即 `Dom` 到 `Media`，以及以后在这个范围内新增的轨道）上时间早于 T 的事件，都在这个 chunk 之前的 chunk 里。
+
+- 同一段内，同步 chunk 的 `startTime` 不减小。
+- 读取方可以播放时间早于最近一个 T 的页面事件；读到下一个段的 Header 或字节流结束时，这一段的事件全部可以播放。
+- 其他轨道不受同步 chunk 约束：数据轨道（16–31）的事件可能晚到，读取方按时间插入；`Assets` 轨道的内容与时间无关，到达后即可使用；媒体轨道的包按第 7 节缓冲。
+- 只写文件的写入方不必写同步 chunk，读取方也可以忽略它。
+
+写入方每隔一段时间（即实时延迟，默认 5 秒）结束各轨道的 chunk 并写出同步 chunk。
+
 ## 5. 轨道
 
 | ID | 轨道 | ID | 轨道 |
@@ -111,7 +127,8 @@ Segment := Header Chunk*
 | 3 | `Pointer`：指针与触摸 | 18 | `Perf`：性能指标 |
 | 4 | `Scroll`：滚动 | 19 | `Custom`：业务自定义事件 |
 | 5 | `Viewport`：视口与缩放 | 32 | `Assets`：抓取的资源（如 `blob:` URL） |
-| 6 | `Navigation`：页面内导航 | ≥ 256 | 动态轨道，录制时为每路媒体流分配，并在录像中声明 |
+| 6 | `Navigation`：页面内导航 | ≥ 256 | 动态轨道，录制时为每路媒体流分配，由 MediaTrack 事件声明（第 7 节） |
+| 7 | `Media`：媒体轨道的声明，音视频元素的播放状态 | | |
 
 1–255 中其余的 ID 保留，供以后的固定轨道使用。
 
@@ -155,6 +172,8 @@ Segment := Header Chunk*
 | 14 | Network | `Network` | 结束的网络请求 |
 | 15 | Perf | `Perf` | 性能指标 |
 | 16 | Custom | `Custom` | 业务自定义事件 |
+| 17 | MediaTrack | `Media` | 声明一个媒体轨道，或改变它的格式 |
+| 18 | MediaState | `Media` | `<audio>` / `<video>` 的播放状态 |
 
 ### 6.3 节点 ID
 
@@ -331,13 +350,69 @@ Segment := Header Chunk*
 
 字符串事件名、字符串数据（JSON 文本）。
 
-## 7. 演进规则
+### 6.21 MediaTrack（17）
+
+声明媒体轨道，或者从事件时间起改变它的格式（例如 canvas 改变了尺寸）。见第 7 节。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| track | `varuint` | 动态轨道 ID，小于 256 是错误 |
+| kind | `u8` | 1 视频，2 音频。其他值是错误 |
+| targetId | `varuint` | 显示这个轨道的节点，如 `<canvas>`；0 表示没有，如旁白 |
+| codec | 字符串 | WebCodecs 的 codec 字符串，如 `vp09.00.10.08`、`opus`；容器流为空 |
+| description | `bytes` | WebCodecs 解码器配置的 `description`，如 H.264 的 `avcC`；不需要时为空 |
+| container | 字符串 | 容器流的 MIME 类型，如 `audio/webm;codecs=opus`；编码帧为空 |
+| width、height | `varuint` | 视频的编码尺寸（像素）；音频为 0 |
+| sampleRate、channels | `varuint` | 音频的采样率和声道数；视频为 0，容器流自带时也可以为 0 |
+
+codec 和 container 必须恰好有一个非空，否则是错误。
+
+### 6.22 MediaState（18）
+
+`<audio>` / `<video>` 元素的播放状态。录制端在元素开始播放、暂停、跳转、改变速率或音量时写出，录制开始时也为已有的元素各写一个。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | `varuint` | 元素的节点 ID |
+| flags | `u8` | bit 0 = 暂停，bit 1 = 静音；其余位非 0 是错误 |
+| currentTime | `f64` | 播放位置，单位秒 |
+| playbackRate | `f64` | 播放速率 |
+| volume | `f64` | 音量，0 到 1 |
+
+元素在播放时，回放时刻 t 的位置是 `currentTime + (t − 事件时间) / 1000 × playbackRate`。
+
+## 7. 媒体
+
+媒体轨道是动态轨道（ID ≥ 256），录制 canvas、视频画面、麦克风旁白这类连续的音视频。每个媒体轨道先由 `Media` 轨道上的 MediaTrack 事件（6.21）声明，事件时间不晚于它的第一个包；它的包放在这个轨道的媒体 chunk（kind 2）里。轨道有两种形式：
+
+- **编码帧**（codec 非空）：每个包是 WebCodecs 编码出的一个 `EncodedVideoChunk` / `EncodedAudioChunk`。包的时间是它的显示时间，关键包是关键帧。读取方用 MediaTrack 的 codec、description、尺寸或采样率配置解码器，从时刻 t 之前最近的关键包开始解码。
+- **容器流**（container 非空）：包是同一条字节流依次切下的片段，字节流是 container 格式的媒体文件（如 MediaRecorder 写出的 WebM）。从声明起把包按顺序拼起来，就是可以播放的文件；文件的 0 秒对应 MediaTrack 事件的时间。声明后的第一个包是关键包，其余不是。包的时间是它写出的时刻，只用于分 chunk 和实时流。
+
+同一轨道再次出现 MediaTrack 事件时，之后的包按新格式解码，并且下一个包是关键包。
+
+### 7.1 媒体 chunk
+
+媒体 chunk 的负载是一串包，每个包为：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| flags | `u8` | bit 0 = 关键包，可以从这里开始解码；其余位非 0 是错误 |
+| dt | `varint` | 距上一个包的微秒数；第一个包相对 chunk 的 `startTime × 1000`。可以为负：有 B 帧的视频按解码顺序存放，显示时间会往回走 |
+| duration | `varuint` | 包的时长，单位微秒；未知时为 0 |
+| data | `bytes` | 包的内容 |
+
+- 包的时间 = `startTime × 1000` 加上累计的 `dt`，为负或超出安全整数范围是错误。
+- chunk 的 `startTime` 不晚于其中最早的包，第一个包是关键包时 chunk 带关键帧标记。
+- 写入方在每个关键包处开始新 chunk，读取方从关键帧 chunk 读起就能解码；chunk 也可以在两个关键包之间因为大小或实时延迟而结束。
+- 编码过的音视频几乎压缩不了，写入方不压缩媒体 chunk。
+
+## 8. 演进规则
 
 - **向后兼容的扩展**：新增 chunk kind、轨道、事件类型、`meta` 字段。旧读取方会跳过这些新内容，不需要提升 `version`。
 - **不兼容的改变**：修改已有字段的布局或语义、启用新的 flag 位，都必须提升 `version`。
 - 1.0 之前 `version` 保持为 0，格式可能直接调整；1.0 起按以上规则执行。
 
-## 8. 安全
+## 9. 安全
 
 录像在回放端是**不可信输入**：
 

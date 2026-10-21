@@ -34,7 +34,11 @@ export const EventType = {
     /** A performance measurement. Track `Perf`. */
     Perf: 15,
     /** An event the application recorded. Track `Custom`. */
-    Custom: 16
+    Custom: 16,
+    /** Declares a media track, or changes its format from here on. Track `Media`. */
+    MediaTrack: 17,
+    /** Playback state of an audio or video element. Track `Media`. */
+    MediaState: 18
 } as const
 
 export type EventType = (typeof EventType)[keyof typeof EventType]
@@ -374,6 +378,54 @@ export interface CustomDataEvent {
     data: string
 }
 
+export const MediaKind = {
+    Video: 1,
+    Audio: 2
+} as const
+
+export type MediaKind = (typeof MediaKind)[keyof typeof MediaKind]
+
+/**
+ * The format of a media track's packets from this event's time on. A track holds either encoded chunks of
+ * WebCodecs, one per packet, named by `codec`; or a byte stream in a container, such as MediaRecorder writes,
+ * named by `container`. Exactly one of the two is set. After a change of format, the track's next packet is a key
+ * packet.
+ */
+export interface MediaTrackEvent {
+    type: typeof EventType.MediaTrack
+    /** The track whose media chunks hold the packets: `FIRST_DYNAMIC_TRACK` or above. */
+    track: number
+    kind: MediaKind
+    /** The element the track shows in, such as a canvas; 0 for none, such as a narration. */
+    targetId: number
+    /** WebCodecs codec string, such as `vp09.00.10.08` or `opus`; empty for a container. */
+    codec: string
+    /** WebCodecs decoder `description`, such as an `avcC` box; empty when the codec needs none. */
+    description: Uint8Array
+    /** MIME type of the byte stream, such as `audio/webm;codecs=opus`; empty for WebCodecs chunks. */
+    container: string
+    /** Coded size of video, in pixels; 0 for audio. */
+    width: number
+    height: number
+    /** Audio sample rate and channel count; 0 for video, or when the container gives them. */
+    sampleRate: number
+    channels: number
+}
+
+/** The playback state of an audio or video element, as the page left it at the event's time. */
+export interface MediaStateEvent {
+    type: typeof EventType.MediaState
+    /** The `<audio>` or `<video>` element. */
+    id: number
+    paused: boolean
+    muted: boolean
+    /** Position in the media, in seconds. While playing, it moves on from there at `playbackRate`. */
+    currentTime: number
+    playbackRate: number
+    /** From 0 to 1. */
+    volume: number
+}
+
 export type TcrEvent =
     | SnapshotEvent
     | MutationsEvent
@@ -391,3 +443,5 @@ export type TcrEvent =
     | NetworkEvent
     | PerfEvent
     | CustomDataEvent
+    | MediaTrackEvent
+    | MediaStateEvent

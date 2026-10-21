@@ -6,6 +6,8 @@ export const Track = {
     Scroll: 4,
     Viewport: 5,
     Navigation: 6,
+    /** Media tracks declared, and the playback state of audio and video elements. */
+    Media: 7,
     Console: 16,
     Network: 17,
     Perf: 18,

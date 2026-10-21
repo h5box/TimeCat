@@ -6,7 +6,9 @@ import {
     ConsoleSource,
     EventType,
     EventWriter,
+    FIRST_DYNAMIC_TRACK,
     InputKind,
+    MediaKind,
     Namespace,
     NodeKind,
     PointerAction,
@@ -14,12 +16,22 @@ import {
     SheetChangeKind,
     SheetOwner,
     TcrDecodeError,
+    Track,
     decodeEvent,
     encodeEvent,
     readEventFrames,
-    writeEventFrame
+    readMediaPackets,
+    writeEventFrame,
+    writeMediaPacket
 } from '../src/index.ts'
-import type { DocumentNode, MutationsEvent, SerializedNode, SnapshotEvent, TcrEvent } from '../src/index.ts'
+import type {
+    DocumentNode,
+    MediaPacket,
+    MutationsEvent,
+    SerializedNode,
+    SnapshotEvent,
+    TcrEvent
+} from '../src/index.ts'
 
 /** Test-side description of a node; `build` numbers it the way implicit ids are assigned. */
 type Spec =
@@ -336,7 +348,47 @@ const otherEvents: fc.Arbitrary<TcrEvent> = fc.oneof(
         value: fc.double(),
         targetId: fc.nat(10_000)
     }),
-    fc.record({ type: fc.constant(EventType.Custom), name: fc.string({ maxLength: 20 }), data: fc.json() })
+    fc.record({ type: fc.constant(EventType.Custom), name: fc.string({ maxLength: 20 }), data: fc.json() }),
+    fc
+        .record({
+            track: fc.integer({ min: FIRST_DYNAMIC_TRACK, max: 100_000 }),
+            kind: fc.constantFrom(MediaKind.Video, MediaKind.Audio),
+            targetId: fc.nat(10_000),
+            format: fc.oneof(
+                fc.tuple(fc.constantFrom('vp09.00.10.08', 'avc1.42E01F', 'opus'), fc.constant('')),
+                fc.tuple(fc.constant(''), fc.constantFrom('video/webm;codecs=vp8', 'audio/mp4;codecs=mp4a.40.2'))
+            ),
+            description: fc.uint8Array({ maxLength: 40 }),
+            width: fc.nat(8000),
+            height: fc.nat(8000),
+            sampleRate: fc.constantFrom(0, 44_100, 48_000),
+            channels: fc.nat(8)
+        })
+        .map(
+            ({ track, kind, targetId, format: [codec, container], description, width, height, sampleRate, channels }) =>
+                ({
+                    type: EventType.MediaTrack,
+                    track,
+                    kind,
+                    targetId,
+                    codec,
+                    description,
+                    container,
+                    width,
+                    height,
+                    sampleRate,
+                    channels
+                }) satisfies TcrEvent
+        ),
+    fc.record({
+        type: fc.constant(EventType.MediaState),
+        id: smallId,
+        paused: fc.boolean(),
+        muted: fc.boolean(),
+        currentTime: fc.double({ min: 0, noNaN: true }),
+        playbackRate: fc.double(),
+        volume: fc.double({ min: 0, max: 1, noNaN: true })
+    })
 )
 
 describe('snapshot events', () => {
@@ -714,6 +766,45 @@ describe('decoding untrusted bodies', () => {
         expect(decodeOutcome(EventType.Scroll, writer.finish())).toBe('TcrDecodeError')
     })
 
+    it('rejects media tracks below the dynamic range, unknown kinds and formats that are not one of the two', () => {
+        const track = {
+            type: EventType.MediaTrack,
+            track: FIRST_DYNAMIC_TRACK,
+            kind: MediaKind.Video,
+            targetId: 3,
+            codec: 'vp8',
+            description: new Uint8Array(),
+            container: '',
+            width: 640,
+            height: 480,
+            sampleRate: 0,
+            channels: 0
+        } as const
+        expect(() => encodeEvent({ ...track, track: Track.Media })).toThrow(RangeError)
+        expect(() => encodeEvent({ ...track, container: 'video/webm' })).toThrow(RangeError)
+        expect(() => encodeEvent({ ...track, codec: '' })).toThrow(RangeError)
+        const body = encodeEvent(track)
+        expect(decodeOutcome(EventType.MediaTrack, body)).toBe('ok')
+        // Track 256 is two bytes, then come the kind and the target.
+        expect(decodeOutcome(EventType.MediaTrack, Uint8Array.of(Track.Media, ...body.subarray(2)))).toBe(
+            'TcrDecodeError'
+        )
+        expect(decodeOutcome(EventType.MediaTrack, Uint8Array.of(...body.subarray(0, 2), 3, ...body.subarray(3)))).toBe(
+            'TcrDecodeError'
+        )
+        // The codec, a string tag and length then 'vp8' from byte 4 on, made empty: neither format is set.
+        const empty = Uint8Array.of(...body.subarray(0, 5), 0, ...body.subarray(9))
+        expect(decodeOutcome(EventType.MediaTrack, empty)).toBe('TcrDecodeError')
+    })
+
+    it('rejects unknown media state flags', () => {
+        const state = { id: 4, paused: true, muted: true, currentTime: 1.5, playbackRate: 1, volume: 0.5 }
+        const body = encodeEvent({ type: EventType.MediaState, ...state })
+        expect(body[1]).toBe(3)
+        body[1] = 4
+        expect(decodeOutcome(EventType.MediaState, body)).toBe('TcrDecodeError')
+    })
+
     it('skips unknown event types', () => {
         expect(decodeEvent(200, new Uint8Array([1, 2, 3]), { next: 1 })).toBeUndefined()
     })
@@ -742,5 +833,40 @@ describe('event frames', () => {
         const writer = new ByteWriter()
         writeEventFrame(writer, 1, 0, new Uint8Array(10))
         expect(() => readEventFrames(writer.finish().subarray(0, 8), 0)).toThrow(TcrDecodeError)
+    })
+})
+
+describe('media packets', () => {
+    const packet: fc.Arbitrary<MediaPacket> = fc.record({
+        time: fc.nat(10 ** 12),
+        duration: fc.nat(10 ** 7),
+        key: fc.boolean(),
+        data: fc.uint8Array({ maxLength: 40 })
+    })
+
+    it('round-trip times, durations, key flags and data, also going back in time', () => {
+        fc.assert(
+            fc.property(fc.array(packet, { maxLength: 20 }), packets => {
+                const startTime = Math.floor(Math.min(...packets.map(p => p.time), 10 ** 9) / 1000)
+                const writer = new ByteWriter()
+                let previous = startTime * 1000
+                for (const p of packets) {
+                    writeMediaPacket(writer, p, previous)
+                    previous = p.time
+                }
+                expect(readMediaPackets(writer.finish(), startTime)).toEqual(packets)
+            })
+        )
+    })
+
+    it('reject unknown flags, times before the segment and truncated packets', () => {
+        const writer = new ByteWriter()
+        writeMediaPacket(writer, { time: 500, duration: 0, key: true, data: new Uint8Array(4) }, 1000)
+        const bytes = writer.finish()
+        expect(readMediaPackets(bytes, 1)).toEqual([{ time: 500, duration: 0, key: true, data: new Uint8Array(4) }])
+        expect(() => readMediaPackets(bytes, 0)).toThrow(TcrDecodeError)
+        expect(() => readMediaPackets(bytes.subarray(0, bytes.length - 1), 1)).toThrow(TcrDecodeError)
+        bytes[0] = 2
+        expect(() => readMediaPackets(bytes, 1)).toThrow(TcrDecodeError)
     })
 })
