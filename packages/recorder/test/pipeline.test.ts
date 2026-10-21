@@ -40,6 +40,19 @@ async function roundTrip(events: readonly Written[]) {
     return { header: file.header, chunks }
 }
 
+const HEX = Array.from({ length: 256 }, (_, byte) => byte.toString(16).padStart(2, '0'))
+
+/** Events with their bodies as hex, which `toEqual` compares far faster than long byte arrays. */
+function comparable(events: readonly Written[]): { track: number; type: number; time: number; body: string }[] {
+    return events.map(({ track, type, time, body: bytes }) => {
+        let hex = ''
+        for (const byte of bytes) {
+            hex += HEX[byte]
+        }
+        return { track, type, time, body: hex }
+    })
+}
+
 function concat(parts: readonly Uint8Array[]): Uint8Array {
     const result = new Uint8Array(parts.reduce((length, part) => length + part.length, 0))
     let offset = 0
@@ -97,7 +110,7 @@ describe('Pipeline', () => {
                     const read = chunks
                         .filter(({ chunk }) => chunk.track === track)
                         .flatMap(({ chunk, frames }) => frames.map(frame => ({ track: chunk.track, ...frame })))
-                    expect(read).toEqual(events.filter(item => item.track === track))
+                    expect(comparable(read)).toEqual(comparable(events.filter(item => item.track === track)))
                 }
                 for (const { chunk, payload, frames } of chunks) {
                     const first = frames[0]!
