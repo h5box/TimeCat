@@ -1,4 +1,23 @@
-export { decodeEvent, encodeEvent } from './codec.ts'
+export {
+    decodeEvent,
+    encodeAdoptedStyleSheets,
+    encodeAsset,
+    encodeConsole,
+    encodeCustom,
+    encodeEvent,
+    encodeFontFace,
+    encodeInput,
+    encodeMutations,
+    encodeNavigation,
+    encodeNetwork,
+    encodePerf,
+    encodePointerButton,
+    encodePointerMoves,
+    encodeScroll,
+    encodeSnapshot,
+    encodeStyleSheet,
+    encodeViewport
+} from './codec.ts'
 export type { IdCounter } from './codec.ts'
 export { gunzip, gzip } from './compression.ts'
 export {
@@ -15,24 +34,46 @@ export {
 export type { Chunk, FileHeader, SegmentInfo } from './container.ts'
 export { TcrDecodeError } from './errors.ts'
 export { EventWriter } from './event-writer.ts'
-export { EventType, InputKind, Namespace, NodeKind, PointerAction, PointerType, SnapshotFlag } from './events.ts'
+export {
+    ConsoleLevel,
+    ConsoleSource,
+    EventType,
+    InputKind,
+    Namespace,
+    NodeKind,
+    PointerAction,
+    PointerType,
+    SheetChangeKind,
+    SheetOwner,
+    SnapshotFlag
+} from './events.ts'
 export type {
     AddedRun,
+    AdoptedStyleSheetsEvent,
+    AssetEvent,
     AttributeChange,
     CommentNode,
+    ConsoleEvent,
+    CustomDataEvent,
     DoctypeNode,
     DocumentNode,
     ElementNode,
+    FontFaceEvent,
     InputChange,
     InputEvent,
     MutationsEvent,
     NavigationEvent,
+    NetworkEvent,
+    PerfEvent,
     PointerButtonEvent,
     PointerMovesEvent,
     ScrollEvent,
     ScrollPosition,
     SerializedNode,
+    ShadowRootNode,
+    SheetChange,
     SnapshotEvent,
+    StyleSheetEvent,
     TcrEvent,
     TextChange,
     TextNode,

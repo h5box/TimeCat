@@ -39,19 +39,18 @@ export function snapshotOf(
     options: { doctype?: boolean; url?: string; quirks?: boolean } = {}
 ): SnapshotEvent {
     const ids = { next: 2 }
-    const root: DocumentNode = { kind: NodeKind.Document, id: 1, children: [] }
+    const root: DocumentNode = {
+        kind: NodeKind.Document,
+        id: 1,
+        url: options.url ?? 'https://example.com/app/page.html',
+        quirks: options.quirks ?? false,
+        children: []
+    }
     if (options.doctype ?? true) {
         root.children.push({ kind: NodeKind.Doctype, id: ids.next++, name: 'html', publicId: '', systemId: '' })
     }
     root.children.push(...children.map(child => build(child, ids)))
-    return {
-        type: EventType.Snapshot,
-        url: options.url ?? 'https://example.com/app/page.html',
-        quirks: options.quirks ?? false,
-        explicitIds: false,
-        nextId: ids.next,
-        root
-    }
+    return { type: EventType.Snapshot, explicitIds: false, nextId: ids.next, root }
 }
 
 /** `<html><head></head><body>...</body></html>`: html is 3, head 4, body 5, the body's nodes from 6 on. */

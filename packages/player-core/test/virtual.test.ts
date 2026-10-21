@@ -47,7 +47,11 @@ describe('VirtualDocument', () => {
         const document = new VirtualDocument()
         document.apply(pageOf([{ tag: 'p', attributes: ['class', 'a'], children: [{ text: 'hi' }] }]))
         const { snapshot, nextId } = stateOf(document, 42)
-        expect(snapshot).toMatchObject({ explicitIds: true, nextId: 42, url: 'https://example.com/app/page.html' })
+        expect(snapshot).toMatchObject({
+            explicitIds: true,
+            nextId: 42,
+            root: { url: 'https://example.com/app/page.html' }
+        })
         expect(nextId).toBe(42)
         const ids: number[] = []
         const collect = (node: SerializedNode): void => {
@@ -198,11 +202,11 @@ describe('VirtualDocument', () => {
         const document = new VirtualDocument()
         document.apply(pageOf([{ tag: 'p' }]))
         document.apply({ type: EventType.Scroll, positions: [{ id: 1, x: 0, y: 50 }] })
-        document.apply({ type: EventType.Navigation, url: 'https://example.com/next' })
-        expect(stateOf(document, 9).snapshot.url).toBe('https://example.com/next')
+        document.apply({ type: EventType.Navigation, id: 1, url: 'https://example.com/next' })
+        expect(stateOf(document, 9).snapshot.root.url).toBe('https://example.com/next')
         document.apply(snapshotOf([{ tag: 'html' }], { url: 'https://example.com/other', quirks: true }))
         const { snapshot, scroll } = stateOf(document, 9)
-        expect(snapshot).toMatchObject({ url: 'https://example.com/other', quirks: true })
+        expect(snapshot.root).toMatchObject({ url: 'https://example.com/other', quirks: true })
         expect(scroll).toBeUndefined()
         expect(document.size).toBe(3)
     })

@@ -1,4 +1,4 @@
-import { encodeEvent, EventType, InputKind } from '@timecat-js/protocol'
+import { encodeInput, InputKind } from '@timecat-js/protocol'
 import type { InputChange } from '@timecat-js/protocol'
 import { isCheckable, isFormControl, isInput, isOptGroup, isOption, isSelect } from './dom.ts'
 import type { FormControl } from './dom.ts'
@@ -72,7 +72,7 @@ export class InputRecorder {
             }
         }
         this.#marked.clear()
-        return changes.length === 0 ? undefined : encodeEvent({ type: EventType.Input, changes })
+        return changes.length === 0 ? undefined : encodeInput({ changes })
     }
 
     #change(control: FormControl): InputChange | undefined {

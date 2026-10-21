@@ -1,4 +1,4 @@
-import { encodeEvent, EventType } from '@timecat-js/protocol'
+import { encodeScroll } from '@timecat-js/protocol'
 import type { ScrollPosition } from '@timecat-js/protocol'
 import { isDocument, isElement } from './dom.ts'
 import type { NodeIds } from './ids.ts'
@@ -57,6 +57,6 @@ export class ScrollRecorder {
             positions.push({ id, x, y })
         }
         this.#marked.clear()
-        return positions.length === 0 ? undefined : encodeEvent({ type: EventType.Scroll, positions })
+        return positions.length === 0 ? undefined : encodeScroll({ positions })
     }
 }

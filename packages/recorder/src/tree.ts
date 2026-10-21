@@ -151,7 +151,7 @@ export class TreeWriter {
         } else if (isDocument(node)) {
             this.#ids.assign(node)
             const first = node.firstChild
-            writer.document(first !== null)
+            writer.document(node.URL, node.compatMode === 'BackCompat', first !== null)
             if (first !== null) {
                 this.#push(node, first, HTML_NAMESPACE, TextMask.None)
             }

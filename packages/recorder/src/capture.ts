@@ -1,4 +1,12 @@
-import { ByteWriter, encodeEvent, EventType, EventWriter, PointerAction, Track } from '@timecat-js/protocol'
+import {
+    ByteWriter,
+    encodeNavigation,
+    encodeViewport,
+    EventType,
+    EventWriter,
+    PointerAction,
+    Track
+} from '@timecat-js/protocol'
 import type { EventSink } from './batch.ts'
 import {
     HTML_NAMESPACE,
@@ -231,7 +239,7 @@ export class Capture implements EventListenerObject {
         const writer = new EventWriter(new ByteWriter(SNAPSHOT_BUFFER))
         const tree = new TreeWriter(writer, this.#ids, this.#privacy, this.#buffer, true)
         this.#url = document.URL
-        writer.snapshotHeader(this.#url, document.compatMode === 'BackCompat')
+        writer.snapshotHeader()
         tree.begin(document, HTML_NAMESPACE, TextMask.None)
         let deadline = performance.now() + sliceMs
         const shouldYield = (): boolean => performance.now() >= deadline
@@ -285,15 +293,12 @@ export class Capture implements EventListenerObject {
                 sink.event(Track.Scroll, EventType.Scroll, time, scroll)
             }
             this.#writeViewport(time)
-            const url = this.#document.URL
-            if (url !== this.#url) {
+            const document = this.#document
+            const url = document.URL
+            const id = this.#ids.get(document)
+            if (url !== this.#url && id !== undefined) {
                 this.#url = url
-                sink.event(
-                    Track.Navigation,
-                    EventType.Navigation,
-                    time,
-                    encodeEvent({ type: EventType.Navigation, url })
-                )
+                sink.event(Track.Navigation, EventType.Navigation, time, encodeNavigation({ id, url }))
             }
             sink.commit()
         } catch (error) {
@@ -352,12 +357,7 @@ export class Capture implements EventListenerObject {
         if (width !== this.#width || height !== this.#height) {
             this.#width = width
             this.#height = height
-            this.#sink.event(
-                Track.Viewport,
-                EventType.Viewport,
-                time,
-                encodeEvent({ type: EventType.Viewport, width, height })
-            )
+            this.#sink.event(Track.Viewport, EventType.Viewport, time, encodeViewport({ width, height }))
         }
     }
 

@@ -2,6 +2,8 @@ import * as fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import {
     ByteWriter,
+    ConsoleLevel,
+    ConsoleSource,
     EventType,
     EventWriter,
     InputKind,
@@ -9,6 +11,8 @@ import {
     NodeKind,
     PointerAction,
     PointerType,
+    SheetChangeKind,
+    SheetOwner,
     TcrDecodeError,
     decodeEvent,
     encodeEvent,
@@ -21,9 +25,23 @@ import type { DocumentNode, MutationsEvent, SerializedNode, SnapshotEvent, TcrEv
 type Spec =
     | { text: string }
     | { comment: string }
-    | { tag: string; namespace?: string | undefined; attributes?: string[]; children?: Spec[] }
+    /** A shadow root. */
+    | { closed: boolean; children: Spec[] }
+    /** A frame's document. */
+    | { url: string; quirks: boolean; children: Spec[] }
+    | {
+          tag: string
+          namespace?: string | undefined
+          attributes?: string[]
+          /** A shadow root or document, which goes first. */
+          inner?: Spec | undefined
+          children?: Spec[]
+      }
 
-/** Gives a spec preorder ids from `ids.next` on. Elements without a namespace inherit their parent's. */
+/**
+ * Gives a spec preorder ids from `ids.next` on. Elements without a namespace inherit their parent's; the children
+ * of shadow roots and documents start from HTML.
+ */
 function build(spec: Spec, ids: { next: number }, parentNamespace: string = Namespace.HTML): SerializedNode {
     const id = ids.next++
     if ('text' in spec) {
@@ -32,8 +50,18 @@ function build(spec: Spec, ids: { next: number }, parentNamespace: string = Name
     if ('comment' in spec) {
         return { kind: NodeKind.Comment, id, data: spec.comment }
     }
+    if ('closed' in spec) {
+        return { kind: NodeKind.ShadowRoot, id, closed: spec.closed, children: spec.children.map(c => build(c, ids)) }
+    }
+    if ('url' in spec) {
+        const children = spec.children.map(child => build(child, ids))
+        return { kind: NodeKind.Document, id, url: spec.url, quirks: spec.quirks, children }
+    }
     const namespace = spec.namespace ?? parentNamespace
-    const children = (spec.children ?? []).map(child => build(child, ids, namespace))
+    const children = spec.inner === undefined ? [] : [build(spec.inner, ids)]
+    for (const child of spec.children ?? []) {
+        children.push(build(child, ids, namespace))
+    }
     return { kind: NodeKind.Element, id, tag: spec.tag, namespace, attributes: spec.attributes ?? [], children }
 }
 
@@ -43,19 +71,18 @@ function snapshotOf(
     options: { doctype?: boolean; url?: string; quirks?: boolean } = {}
 ): SnapshotEvent {
     const ids = { next: 2 }
-    const root: DocumentNode = { kind: NodeKind.Document, id: 1, children: [] }
+    const root: DocumentNode = {
+        kind: NodeKind.Document,
+        id: 1,
+        url: options.url ?? 'https://example.com/',
+        quirks: options.quirks ?? false,
+        children: []
+    }
     if (options.doctype ?? true) {
         root.children.push({ kind: NodeKind.Doctype, id: ids.next++, name: 'html', publicId: '', systemId: '' })
     }
     root.children.push(...children.map(child => build(child, ids)))
-    return {
-        type: EventType.Snapshot,
-        url: options.url ?? 'https://example.com/',
-        quirks: options.quirks ?? false,
-        explicitIds: false,
-        nextId: ids.next,
-        root
-    }
+    return { type: EventType.Snapshot, explicitIds: false, nextId: ids.next, root }
 }
 
 function roundTrip(event: TcrEvent, ids = { next: 1 }): TcrEvent | undefined {
@@ -72,9 +99,36 @@ function decodeOutcome(type: number, body: Uint8Array): string {
     }
 }
 
-/** Outcome of a snapshot body with flags 0, an empty URL (literal tag 0, length 0) and the given tree bytes. */
+/** Outcome of a snapshot body with flags 0 and the given tree bytes. */
 function snapshotOutcome(...tree: number[]): string {
-    return decodeOutcome(EventType.Snapshot, new Uint8Array([0, 0, 0, ...tree]))
+    return decodeOutcome(EventType.Snapshot, new Uint8Array([0, ...tree]))
+}
+
+/** Outcome of a snapshot with implicit ids whose tree `write` writes. */
+function treeOutcome(write: (writer: EventWriter) => void): string {
+    const writer = new EventWriter()
+    writer.snapshotHeader()
+    write(writer)
+    return decodeOutcome(EventType.Snapshot, writer.bytes.finish())
+}
+
+/** Outcome of a Mutations body with one run under node 1, of `count` nodes that `write` writes. */
+function runOutcome(beforeId: number, count: number, write: (writer: EventWriter) => void): string {
+    const writer = new EventWriter()
+    // No removals, then the run.
+    for (const value of [0, 1, 1, beforeId, count]) {
+        writer.bytes.varuint(value)
+    }
+    write(writer)
+    // No attribute or text changes.
+    writer.bytes.varuint(0)
+    writer.bytes.varuint(0)
+    return decodeOutcome(EventType.Mutations, writer.bytes.finish())
+}
+
+/** A document token with an empty URL (literal tag 0, length 0). */
+function documentToken(flags = 0): number[] {
+    return [NodeKind.Document | flags, 0, 0]
 }
 
 const attributeName = fc.constantFrom('class', 'id', 'href', 'data-x', 'xlink:href', 'viewBox', 'aria-label', 'style')
@@ -83,22 +137,28 @@ const attributeValue = fc.oneof(
     fc.string({ unit: 'grapheme', maxLength: 80 })
 )
 
-const spec = fc.letrec<{ node: Spec; element: Spec; leaf: Spec }>(tie => ({
+const spec = fc.letrec<{ node: Spec; element: Spec; leaf: Spec; inner: Spec }>(tie => ({
     node: fc.oneof({ depthSize: 'small', withCrossShrink: true }, tie('leaf'), tie('element')),
     leaf: fc.oneof(
         fc.record({ text: fc.string({ unit: 'grapheme', maxLength: 40 }) }),
         fc.record({ comment: fc.string({ maxLength: 20 }) })
     ),
     element: fc.record({
-        tag: fc.constantFrom('div', 'span', 'a', 'svg', 'path', 'foreignObject', 'math', 'x-custom'),
+        tag: fc.constantFrom('div', 'span', 'a', 'svg', 'path', 'foreignObject', 'math', 'x-custom', 'iframe'),
         namespace: fc.option(fc.constantFrom<string>(Namespace.HTML, Namespace.SVG, Namespace.MathML, '', 'urn:x'), {
             nil: undefined
         }),
         attributes: fc
             .uniqueArray(fc.tuple(attributeName, attributeValue), { selector: ([name]) => name, maxLength: 9 })
             .map(pairs => pairs.flat()),
+        inner: fc.option(tie('inner'), { nil: undefined, freq: 4 }),
         children: fc.array(tie('node'), { maxLength: 4 })
-    })
+    }),
+    inner: fc.oneof(
+        { depthSize: 'small' },
+        fc.record({ closed: fc.boolean(), children: fc.array(tie('node'), { maxLength: 3 }) }),
+        fc.record({ url: fc.webUrl(), quirks: fc.boolean(), children: fc.array(tie('node'), { maxLength: 2 }) })
+    )
 }))
 
 const snapshot = fc
@@ -115,6 +175,10 @@ const snapshot = fc
     .map(({ children, ...options }) => snapshotOf(children, options))
 
 const smallId = fc.integer({ min: 1, max: 5000 })
+const cssRule = fc.oneof(
+    fc.constantFrom('.a { color: red; }', '@media (width >= 600px) { .b { margin: 0px; } }'),
+    fc.string({ maxLength: 40 })
+)
 const pointerType = fc.constantFrom(PointerType.Mouse, PointerType.Pen, PointerType.Touch)
 
 /** Mutations whose added nodes are numbered from `firstId`. */
@@ -123,7 +187,15 @@ function mutations(firstId: number): fc.Arbitrary<MutationsEvent> {
         .record({
             removes: fc.array(smallId, { maxLength: 5 }),
             adds: fc.array(
-                fc.record({ parentId: smallId, beforeId: fc.nat(5000), nodes: fc.array(spec.node, { maxLength: 3 }) }),
+                fc.oneof(
+                    fc.record({
+                        parentId: smallId,
+                        beforeId: fc.nat(5000),
+                        nodes: fc.array(spec.node, { maxLength: 3 })
+                    }),
+                    // A shadow root attached to an element, or a document loaded into a frame.
+                    fc.record({ parentId: smallId, beforeId: fc.constant(0), nodes: fc.tuple(spec.inner) })
+                ),
                 { maxLength: 4 }
             ),
             attributes: fc.array(
@@ -206,7 +278,65 @@ const otherEvents: fc.Arbitrary<TcrEvent> = fc.oneof(
         })
     }),
     fc.record({ type: fc.constant(EventType.Viewport), width: fc.nat(8000), height: fc.nat(8000) }),
-    fc.record({ type: fc.constant(EventType.Navigation), url: fc.webUrl({ withQueryParameters: true }) })
+    fc.record({ type: fc.constant(EventType.Navigation), id: smallId, url: fc.webUrl({ withQueryParameters: true }) }),
+    fc.record({
+        type: fc.constant(EventType.StyleSheet),
+        owner: fc.constantFrom(SheetOwner.Node, SheetOwner.Constructed),
+        id: smallId,
+        changes: fc.array(
+            fc.oneof(
+                fc.record({ kind: fc.constant(SheetChangeKind.Replace), rules: fc.array(cssRule, { maxLength: 4 }) }),
+                fc.record({ kind: fc.constant(SheetChangeKind.Insert), index: fc.nat(50), rule: cssRule }),
+                fc.record({ kind: fc.constant(SheetChangeKind.Delete), index: fc.nat(50) })
+            ),
+            { maxLength: 4 }
+        )
+    }),
+    fc.record({
+        type: fc.constant(EventType.AdoptedStyleSheets),
+        id: smallId,
+        sheets: fc.array(fc.integer({ min: 1, max: 300 }), { maxLength: 5 })
+    }),
+    fc.record({
+        type: fc.constant(EventType.FontFace),
+        family: fc.string({ maxLength: 20 }),
+        source: fc.oneof(fc.string({ maxLength: 60 }), fc.uint8Array({ maxLength: 100 })),
+        descriptors: fc
+            .uniqueArray(fc.tuple(fc.constantFrom('weight', 'style', 'unicodeRange', 'display'), fc.string()), {
+                selector: ([name]) => name
+            })
+            .map(pairs => pairs.flat())
+    }),
+    fc.record({
+        type: fc.constant(EventType.Asset),
+        url: fc.webUrl(),
+        mimeType: fc.constantFrom('image/png', 'font/woff2', ''),
+        data: fc.uint8Array({ maxLength: 200 })
+    }),
+    fc.record({
+        type: fc.constant(EventType.Console),
+        level: fc.constantFrom(...Object.values(ConsoleLevel)),
+        source: fc.constantFrom(...Object.values(ConsoleSource)),
+        args: fc.array(fc.string({ unit: 'grapheme', maxLength: 30 }), { maxLength: 4 }),
+        stack: fc.string({ maxLength: 60 })
+    }),
+    fc.record({
+        type: fc.constant(EventType.Network),
+        initiator: fc.constantFrom('fetch', 'xmlhttprequest', 'img'),
+        method: fc.constantFrom('GET', 'POST'),
+        url: fc.webUrl({ withQueryParameters: true }),
+        status: fc.nat(599),
+        duration: fc.nat(100_000),
+        size: fc.nat(10_000_000),
+        error: fc.string({ maxLength: 20 })
+    }),
+    fc.record({
+        type: fc.constant(EventType.Perf),
+        metric: fc.constantFrom('LCP', 'CLS', 'INP'),
+        value: fc.double(),
+        targetId: fc.nat(10_000)
+    }),
+    fc.record({ type: fc.constant(EventType.Custom), name: fc.string({ maxLength: 20 }), data: fc.json() })
 )
 
 describe('snapshot events', () => {
@@ -231,10 +361,10 @@ describe('snapshot events', () => {
         const counter = { next: 99 }
         // document 1, doctype 2, html 3, body 4, text 5, svg 6, path 7
         expect(roundTrip(event, counter)).toMatchObject({
-            url: 'https://example.com/a/b',
             nextId: 8,
             root: {
                 id: 1,
+                url: 'https://example.com/a/b',
                 children: [
                     { id: 2, name: 'html' },
                     {
@@ -317,17 +447,64 @@ describe('snapshot events', () => {
         }
         const event: SnapshotEvent = {
             type: EventType.Snapshot,
-            url: 'about:blank',
-            quirks: true,
             explicitIds: false,
             nextId: depth + 3,
-            root: { kind: NodeKind.Document, id: 1, children: [node] }
+            root: { kind: NodeKind.Document, id: 1, url: 'about:blank', quirks: true, children: [node] }
         }
         const body = encodeEvent(event)
         const decoded = decodeEvent(EventType.Snapshot, body, { next: 1 })
-        expect(decoded).toMatchObject({ quirks: true, nextId: depth + 3 })
+        expect(decoded).toMatchObject({ nextId: depth + 3, root: { quirks: true } })
         // Comparing the trees directly would recurse 50 000 levels deep; the re-encoding carries the same content.
         expect(decoded && encodeEvent(decoded)).toEqual(body)
+    })
+
+    it('puts shadow roots and frame documents first in their element', () => {
+        const event = snapshotOf([
+            {
+                tag: 'x-card',
+                inner: { closed: true, children: [{ tag: 'slot' }] },
+                children: [{ text: 'light' }]
+            },
+            {
+                tag: 'iframe',
+                namespace: Namespace.SVG,
+                inner: {
+                    url: 'https://example.com/frame',
+                    quirks: true,
+                    children: [{ tag: 'html', children: [{ tag: 'svg', namespace: Namespace.SVG }] }]
+                }
+            }
+        ])
+        // document 1, doctype 2, x-card 3, shadow root 4, slot 5, text 6, iframe 7, document 8, html 9, svg 10
+        expect(roundTrip(event)).toMatchObject({
+            nextId: 11,
+            root: {
+                children: [
+                    {},
+                    {
+                        id: 3,
+                        children: [
+                            { id: 4, kind: NodeKind.ShadowRoot, closed: true, children: [{ id: 5, tag: 'slot' }] },
+                            { id: 6, data: 'light' }
+                        ]
+                    },
+                    {
+                        id: 7,
+                        children: [
+                            {
+                                id: 8,
+                                kind: NodeKind.Document,
+                                url: 'https://example.com/frame',
+                                quirks: true,
+                                // A document's children start from HTML, whatever its frame's namespace.
+                                children: [{ id: 9, namespace: Namespace.HTML }]
+                            }
+                        ]
+                    }
+                ]
+            }
+        })
+        expect(roundTrip(event)).toEqual(event)
     })
 
     it('writes attribute counts of seven and more separately', () => {
@@ -376,17 +553,22 @@ describe('mutation events', () => {
         )
     })
 
-    it('rejects documents among added nodes', () => {
-        const writer = new EventWriter()
-        // No removals, then one run under node 1, appended, of one node.
-        for (const value of [0, 1, 1, 0, 1]) {
-            writer.bytes.varuint(value)
-        }
-        writer.document(false)
-        // No attribute or text changes.
-        writer.bytes.varuint(0)
-        writer.bytes.varuint(0)
-        expect(decodeOutcome(EventType.Mutations, writer.bytes.finish())).toBe('TcrDecodeError')
+    it('takes a document or shadow root only as the only node of a run, appended', () => {
+        expect(runOutcome(0, 1, writer => writer.document('about:blank', false, false))).toBe('ok')
+        expect(runOutcome(0, 1, writer => writer.shadowRoot(false, false))).toBe('ok')
+        expect(runOutcome(4, 1, writer => writer.shadowRoot(false, false))).toBe('TcrDecodeError')
+        expect(
+            runOutcome(0, 2, writer => {
+                writer.comment('')
+                writer.shadowRoot(false, false)
+            })
+        ).toBe('TcrDecodeError')
+        expect(
+            runOutcome(0, 2, writer => {
+                writer.document('', false, false)
+                writer.comment('')
+            })
+        ).toBe('TcrDecodeError')
     })
 })
 
@@ -442,27 +624,88 @@ describe('decoding untrusted bodies', () => {
 
     it('never throws anything but TcrDecodeError on random bytes', () => {
         fc.assert(
-            fc.property(fc.integer({ min: 0, max: 12 }), fc.uint8Array({ maxLength: 200 }), (type, body) => {
+            fc.property(fc.integer({ min: 0, max: 20 }), fc.uint8Array({ maxLength: 200 }), (type, body) => {
                 expect(['ok', 'TcrDecodeError']).toContain(decodeOutcome(type, body))
             })
         )
     })
 
     it('rejects stray end tokens, unknown node kinds and flags', () => {
+        expect(snapshotOutcome(...documentToken())).toBe('ok')
+        expect(snapshotOutcome(...documentToken(0x10))).toBe('ok')
         expect(snapshotOutcome(NodeKind.End)).toBe('TcrDecodeError')
-        expect(snapshotOutcome(6)).toBe('TcrDecodeError')
-        // An end token with flags, and flags on a comment.
-        expect(snapshotOutcome(NodeKind.Document | 0x08, NodeKind.End | 0x08)).toBe('TcrDecodeError')
-        expect(snapshotOutcome(NodeKind.Document | 0x08, NodeKind.Comment | 0x08, 0, 0, NodeKind.End)).toBe(
+        expect(snapshotOutcome(7)).toBe('TcrDecodeError')
+        // An end token with flags, and flags on a comment, a document and a shadow root.
+        expect(snapshotOutcome(...documentToken(0x08), NodeKind.End | 0x08)).toBe('TcrDecodeError')
+        expect(snapshotOutcome(...documentToken(0x08), NodeKind.Comment | 0x08, 0, 0, NodeKind.End)).toBe(
             'TcrDecodeError'
         )
-        expect(snapshotOutcome(NodeKind.Document | 0x10)).toBe('TcrDecodeError')
-        // The root must be a document, and only the root.
+        expect(snapshotOutcome(...documentToken(0x20))).toBe('TcrDecodeError')
+        expect(
+            treeOutcome(writer => {
+                writer.document('', false, true)
+                writer.element('div', undefined, 0, true)
+                writer.bytes.u8(NodeKind.ShadowRoot | 0x20)
+                writer.end()
+                writer.end()
+            })
+        ).toBe('TcrDecodeError')
+        // The root must be a document.
         expect(snapshotOutcome(NodeKind.Comment, 0, 0)).toBe('TcrDecodeError')
-        expect(snapshotOutcome(NodeKind.Document | 0x08, NodeKind.Document, NodeKind.End)).toBe('TcrDecodeError')
-        expect(snapshotOutcome(NodeKind.Document)).toBe('ok')
+        expect(snapshotOutcome(NodeKind.ShadowRoot)).toBe('TcrDecodeError')
         // Unknown snapshot flags.
-        expect(decodeOutcome(EventType.Snapshot, new Uint8Array([4, 0, 0, NodeKind.Document]))).toBe('TcrDecodeError')
+        expect(decodeOutcome(EventType.Snapshot, new Uint8Array([2, ...documentToken()]))).toBe('TcrDecodeError')
+    })
+
+    it('takes documents and shadow roots below the root only first in an element', () => {
+        /** A document with a `<div>` whose children `write` writes. */
+        const inDiv = (write: (writer: EventWriter) => void): string =>
+            treeOutcome(writer => {
+                writer.document('', false, true)
+                writer.element('div', undefined, 0, true)
+                write(writer)
+                writer.end()
+                writer.end()
+            })
+        expect(inDiv(writer => writer.shadowRoot(false, false))).toBe('ok')
+        expect(inDiv(writer => writer.document('', false, false))).toBe('ok')
+        expect(
+            inDiv(writer => {
+                writer.shadowRoot(true, true)
+                writer.element('div', undefined, 0, true)
+                writer.shadowRoot(false, false)
+                writer.end()
+                writer.end()
+                writer.text('light')
+            })
+        ).toBe('ok')
+        expect(
+            inDiv(writer => {
+                writer.text('light')
+                writer.shadowRoot(false, false)
+            })
+        ).toBe('TcrDecodeError')
+        expect(
+            inDiv(writer => {
+                writer.shadowRoot(false, false)
+                writer.document('', false, false)
+            })
+        ).toBe('TcrDecodeError')
+        // Not in a document or a shadow root.
+        expect(
+            treeOutcome(writer => {
+                writer.document('', false, true)
+                writer.shadowRoot(false, false)
+                writer.end()
+            })
+        ).toBe('TcrDecodeError')
+        expect(
+            inDiv(writer => {
+                writer.shadowRoot(false, true)
+                writer.document('', false, false)
+                writer.end()
+            })
+        ).toBe('TcrDecodeError')
     })
 
     it('rejects counts larger than the body', () => {

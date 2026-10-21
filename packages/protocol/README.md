@@ -15,7 +15,7 @@ shared by the recorder, the player and any tooling that reads recordings.
 | `writeFileHeader` / `readFileHeader` | Segment header: magic bytes, format version, session id, segment index, start time and JSON metadata. |
 | `writeChunk` / `readChunk` / `readFile` | Chunk framing: kind, flags, track, sequence, time range and payload. |
 | `gzip` / `gunzip` | Compression through the platform `CompressionStream`, so it adds no bundle weight. |
-| `encodeEvent` / `decodeEvent` | Event bodies: DOM snapshots and mutations, input, pointer, scroll, viewport and navigation. Node ids are implied by document order, so decoding carries an `IdCounter` from event to event. |
+| `encodeEvent` / `decodeEvent` | Event bodies: DOM snapshots and mutations (shadow roots and frame documents included), input, pointer, scroll, viewport, navigation, CSSOM style sheets, fonts, assets, and the console, network, performance and custom events of plugins. Node ids are implied by document order, so decoding carries an `IdCounter` from event to event. |
 | `EventWriter` | Streaming encoder for event bodies. The recorder writes DOM trees through it while walking the page, without building objects first. |
 | `writeEventFrame` / `readEventFrames` | Event framing inside an events chunk: type, time delta and body. |
 | `Track`, `ChunkKind`, `ChunkFlag`, `EventType`, `NodeKind`, … | Protocol constants. |

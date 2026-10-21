@@ -1,4 +1,4 @@
-import { encodeEvent, EventType, PointerType, Track } from '@timecat-js/protocol'
+import { encodePointerButton, encodePointerMoves, EventType, PointerType, Track } from '@timecat-js/protocol'
 import type { PointerAction } from '@timecat-js/protocol'
 import type { EventSink } from './batch.ts'
 
@@ -59,7 +59,7 @@ export class PointerRecorder {
             Track.Pointer,
             EventType.PointerButton,
             time,
-            encodeEvent({ type: EventType.PointerButton, action, pointer, button, x, y, targetId })
+            encodePointerButton({ action, pointer, button, x, y, targetId })
         )
     }
 
@@ -75,13 +75,7 @@ export class PointerRecorder {
         if (times.length === 0) {
             return
         }
-        const body = encodeEvent({
-            type: EventType.PointerMoves,
-            pointer: this.#pointer,
-            times,
-            xs: this.#xs,
-            ys: this.#ys
-        })
+        const body = encodePointerMoves({ pointer: this.#pointer, times, xs: this.#xs, ys: this.#ys })
         this.#sink.event(Track.Pointer, EventType.PointerMoves, this.#start, body)
         times.length = 0
         this.#xs.length = 0

@@ -76,12 +76,12 @@ export class Materializer {
     /** Replaces what the document shows with a snapshot. */
     build(snapshot: SnapshotEvent): void {
         const document = this.#document
-        if (this.#quirks !== snapshot.quirks) {
-            this.#open(snapshot.quirks)
+        const root = snapshot.root
+        if (this.#quirks !== root.quirks) {
+            this.#open(root.quirks)
         }
         this.#reset()
-        this.#url = snapshot.url
-        const root = snapshot.root
+        this.#url = root.url
         this.#register(document, root.id)
         // The viewport keeps the scroll position of what it showed before; a snapshot starts at the top, unless
         // scroll positions after it say otherwise. Elements are new, so they start there anyway.
@@ -137,9 +137,11 @@ export class Materializer {
                 }
                 break
             case EventType.Navigation:
-                this.#url = event.url
-                this.#basesChanged = true
-                this.#updateBase()
+                if (this.#nodes.get(event.id) === this.#document) {
+                    this.#url = event.url
+                    this.#basesChanged = true
+                    this.#updateBase()
+                }
                 break
             default:
                 break

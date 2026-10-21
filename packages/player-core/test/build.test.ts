@@ -45,7 +45,7 @@ describe('buildIndex', () => {
             { time: 10, event: { type: EventType.Viewport, width: 800, height: 600 } },
             { time: 10, event: mutations({ texts: [{ id: 7, data: 'first' }] }) },
             { time: 10, event: mutations({ texts: [{ id: 7, data: 'second' }] }) },
-            { time: 7, event: { type: EventType.Navigation, url: 'https://example.com/next' } }
+            { time: 7, event: { type: EventType.Navigation, id: 1, url: 'https://example.com/next' } }
         ])
         const index = await buildIndex([recording], options)
         expect(typesOf(index)).toEqual([

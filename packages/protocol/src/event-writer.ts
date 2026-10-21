@@ -5,7 +5,12 @@ import { ByteWriter } from './writer.ts'
 // Node header: kind in bits 0-2; flags in bits 3-7.
 export const KIND_MASK = 0x07
 export const HAS_CHILDREN = 0x08
+/** Element: a namespace follows the tag. */
 export const HAS_NAMESPACE = 0x10
+/** Document: it renders in quirks mode. */
+export const QUIRKS = 0x10
+/** Shadow root: it is closed. */
+export const CLOSED = 0x10
 export const ATTRIBUTE_SHIFT = 5
 /** Attribute counts from this value up are written as a separate varuint. */
 export const ATTRIBUTE_ESCAPE = 7
@@ -51,16 +56,25 @@ export class EventWriter {
      * Starts a snapshot body; the document tree follows. Pass `nextId` only for explicit ids, in which case every
      * node method must be given its node's id.
      */
-    snapshotHeader(url: string, quirks: boolean, nextId?: number): void {
-        this.bytes.varuint((nextId === undefined ? 0 : SnapshotFlag.ExplicitIds) | (quirks ? SnapshotFlag.Quirks : 0))
-        this.string(url)
+    snapshotHeader(nextId?: number): void {
+        this.bytes.varuint(nextId === undefined ? 0 : SnapshotFlag.ExplicitIds)
         if (nextId !== undefined) {
             this.bytes.varuint(nextId)
         }
     }
 
-    document(hasChildren: boolean, id?: number): void {
-        this.bytes.u8(NodeKind.Document | (hasChildren ? HAS_CHILDREN : 0))
+    /** The root of a snapshot, or a frame's content as the first child of the frame. */
+    document(url: string, quirks: boolean, hasChildren: boolean, id?: number): void {
+        this.bytes.u8(NodeKind.Document | (hasChildren ? HAS_CHILDREN : 0) | (quirks ? QUIRKS : 0))
+        if (id !== undefined) {
+            this.bytes.varuint(id)
+        }
+        this.string(url)
+    }
+
+    /** A shadow tree, as the first child of its host. */
+    shadowRoot(closed: boolean, hasChildren: boolean, id?: number): void {
+        this.bytes.u8(NodeKind.ShadowRoot | (hasChildren ? HAS_CHILDREN : 0) | (closed ? CLOSED : 0))
         if (id !== undefined) {
             this.bytes.varuint(id)
         }
@@ -127,7 +141,7 @@ export class EventWriter {
         this.string(data, data.length <= MAX_INTERNED_TEXT)
     }
 
-    /** Closes the children of the innermost open document or element. */
+    /** Closes the children of the innermost open node. */
     end(): void {
         this.bytes.u8(NodeKind.End)
     }

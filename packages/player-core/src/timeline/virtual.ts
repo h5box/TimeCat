@@ -1,4 +1,4 @@
-import { encodeEvent, EventType, NodeKind } from '@timecat-js/protocol'
+import { encodeInput, encodeScroll, encodeSnapshot, EventType, NodeKind } from '@timecat-js/protocol'
 import type {
     AddedRun,
     DocumentNode,
@@ -29,8 +29,6 @@ const EMPTY = new Uint8Array(0)
  */
 export class VirtualDocument {
     #root: DocumentNode | undefined
-    #url = ''
-    #quirks = false
     readonly #nodes = new Map<number, SerializedNode>()
     readonly #parents = new Map<number, ParentNode>()
     /** Last recorded state per control, in the order the states were recorded: later ones may undo earlier ones. */
@@ -70,9 +68,13 @@ export class VirtualDocument {
                     }
                 }
                 return event.positions.length
-            case EventType.Navigation:
-                this.#url = event.url
+            case EventType.Navigation: {
+                const node = this.#nodes.get(event.id)
+                if (node?.kind === NodeKind.Document) {
+                    node.url = event.url
+                }
                 return 1
+            }
             default:
                 return 1
         }
@@ -84,20 +86,13 @@ export class VirtualDocument {
         if (root === undefined) {
             return undefined
         }
-        const snapshot = encodeEvent({
-            type: EventType.Snapshot,
-            url: this.#url,
-            quirks: this.#quirks,
-            explicitIds: true,
-            nextId,
-            root
-        })
+        const snapshot = encodeSnapshot({ explicitIds: true, nextId, root })
         const changes = [...this.#inputs.values()]
         const positions = [...this.#scrolls.values()]
         return {
             snapshot,
-            input: changes.length === 0 ? EMPTY : encodeEvent({ type: EventType.Input, changes }),
-            scroll: positions.length === 0 ? EMPTY : encodeEvent({ type: EventType.Scroll, positions })
+            input: changes.length === 0 ? EMPTY : encodeInput({ changes }),
+            scroll: positions.length === 0 ? EMPTY : encodeScroll({ positions })
         }
     }
 
@@ -106,8 +101,6 @@ export class VirtualDocument {
         this.#parents.clear()
         this.#inputs.clear()
         this.#scrolls.clear()
-        this.#url = event.url
-        this.#quirks = event.quirks
         const root = event.root
         this.#root = root
         root.children = documentChildren(root.children)
@@ -253,7 +246,7 @@ function canInsert(parent: ParentNode, node: SerializedNode, before: SerializedN
 function documentChildren(children: SerializedNode[]): SerializedNode[] {
     const kept: SerializedNode[] = []
     for (const child of children) {
-        if (canInsert({ kind: NodeKind.Document, id: 0, children: kept }, child, undefined)) {
+        if (canInsert({ kind: NodeKind.Document, id: 0, url: '', quirks: false, children: kept }, child, undefined)) {
             kept.push(child)
         }
     }

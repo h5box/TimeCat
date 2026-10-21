@@ -2,7 +2,7 @@
 
 | 状态 | 草案。第 2–6 节均已实现 |
 |---|---|
-| 日期 | 2026-10-20，2026-10-21 定稿第 6 节、补充第 4.3 节 |
+| 日期 | 2026-10-20，2026-10-21 定稿第 6 节、补充第 4.3 节；M2 补充 Shadow DOM、frame、样式表、字体、资源和插件事件（第 6.4、6.13–6.20 节） |
 | 实现 | `@timecat-js/protocol`（`FORMAT_VERSION = 0`）；第 4.3 节的时间线由 `@timecat-js/player-core` 实现 |
 | 背景 | [RFC 0001](./0001-timecat-next.md) 第 3.4 节 |
 
@@ -147,11 +147,19 @@ Segment := Header Chunk*
 | 6 | Scroll | `Scroll` | 视口或元素的滚动位置 |
 | 7 | Viewport | `Viewport` | 视口尺寸 |
 | 8 | Navigation | `Navigation` | 同文档内的 URL 变化（History API、hash） |
+| 9 | StyleSheet | `Dom` | 通过 CSSOM 改变的样式规则 |
+| 10 | AdoptedStyleSheets | `Dom` | 文档或 shadow root 采用的样式表 |
+| 11 | FontFace | `Assets` | 脚本添加的字体 |
+| 12 | Asset | `Assets` | 回放时无法再从原 URL 加载的资源，如 `blob:` URL 的内容 |
+| 13 | Console | `Console` | 控制台消息、未捕获的错误和未处理的 Promise 拒绝 |
+| 14 | Network | `Network` | 结束的网络请求 |
+| 15 | Perf | `Perf` | 性能指标 |
+| 16 | Custom | `Custom` | 业务自定义事件 |
 
 ### 6.3 节点 ID
 
 - 节点 ID 是正整数，0 表示"没有"（如 6.6 的 `beforeId`、6.9 的 `targetId`）。
-- 快照默认**不写 ID**：文档节点为 1，其余节点按先序遍历依次为 2、3、4……。快照之后的下一个可用 ID 为节点数加 1。
+- 快照默认**不写 ID**：文档节点为 1，其余节点按先序遍历依次为 2、3、4……。shadow root 和 frame 的文档也是节点，按它们在节点树中的位置编号（6.4）。快照之后的下一个可用 ID 为节点数加 1。
 - 每个快照都重置 ID 空间：它之前的 ID 全部作废。
 - 增量变更新增的节点按它们在事件体里出现的顺序，从当前的下一个可用 ID 继续分配。所以解码 `Dom` 轨道需要从最近的快照开始顺序读取：以快照开头的 `Dom` chunk 是关键帧，其余 `Dom` chunk 不是。其他轨道的事件解码不依赖之前的数据，它们的 chunk 都标为关键帧。
 - 快照也可以显式写出每个节点的 ID（6.5 的 flags bit 0）。录制端不使用这种形式；回放端或剪辑工具从录像的中间状态生成快照时用它保留原有 ID。
@@ -162,9 +170,9 @@ Segment := Header Chunk*
 
 | 位 | 含义 |
 |---|---|
-| 0–2 | 节点类型：0 End，1 Element，2 Text，3 Comment，4 Document，5 Doctype。6 和 7 是错误 |
-| 3 | 有子节点：节点之后依次是各子节点，最后以 End 结束。只用于 Element 和 Document |
-| 4 | 有命名空间：标签名之后写命名空间。只用于 Element |
+| 0–2 | 节点类型：0 End，1 Element，2 Text，3 Comment，4 Document，5 Doctype，6 ShadowRoot。7 是错误 |
+| 3 | 有子节点：节点之后依次是各子节点，最后以 End 结束。只用于 Element、Document 和 ShadowRoot |
+| 4 | Element：有命名空间，标签名之后写命名空间。Document：文档处于怪异模式。ShadowRoot：closed 模式 |
 | 5–7 | 属性个数 0–6；为 7 时，个数另写为 `varuint`。只用于 Element |
 
 节点头之后的字段（`[id]` 只在显式 ID 的快照里出现；所有字符串都经过字符串表）：
@@ -175,26 +183,28 @@ Segment := Header Chunk*
 | Element | `[id]`、标签名、`[命名空间]`、`[属性个数]`、每个属性的名和值、子节点…、End |
 | Text | `[id]`、文本 |
 | Comment | `[id]`、文本 |
-| Document | `[id]`、子节点…、End |
+| Document | `[id]`、文档 URL（相对 URL 以它为基准解析）、子节点…、End |
 | Doctype | `[id]`、name、publicId、systemId |
+| ShadowRoot | `[id]`、子节点…、End |
 
 - 标签名是 local name：HTML 元素为小写，SVG 和 MathML 元素保留大小写。属性名是带前缀的完整名字（如 `xlink:href`）。
-- 不带命名空间的元素继承父节点的命名空间。最顶层的节点（快照中文档的子节点、增量变更中每段新增节点的根）以 HTML 为基准。空字符串表示没有命名空间。
-- Document 只能作为快照的根节点，Doctype 只能是 Document 的子节点。
-- 以下都是错误：在 Text、Comment、Doctype 上设置任何标志位；在 Document 上设置第 3 位以外的标志位；带标志位的 End；没有可结束节点的 End；属性个数乘以 2 超过剩余字节数。
+- 不带命名空间的元素继承父节点的命名空间。最顶层的节点（增量变更中每段新增节点的根），以及 Document 和 ShadowRoot 的子节点，以 HTML 为基准。空字符串表示没有命名空间。
+- Document 是快照的根节点，也表示 frame 的内容：作为 `<iframe>` 或 `<frame>` 的第一个子节点。ShadowRoot 表示元素的 shadow tree，作为宿主元素的第一个子节点。两者之后才是元素自己的子节点。
+- 在根节点以下，Document 和 ShadowRoot 只能是 Element 的第一个子节点，否则是错误。Doctype 只能是 Document 的子节点。
+- 以下都是错误：在 Text、Comment、Doctype 上设置任何标志位；在 Document 和 ShadowRoot 上设置第 3、4 位以外的标志位；带标志位的 End；没有可结束节点的 End；属性个数乘以 2 超过剩余字节数。
 - 嵌套深度没有上限，实现必须用迭代而不是递归来读写节点树。
+- 回放端用 open 模式重建 closed shadow root，因为回放页面不运行脚本，模式只用来展示。
 
 ### 6.5 Snapshot（1）
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| flags | `varuint` | bit 0 = 显式 ID；bit 1 = 文档处于怪异模式。其余位非 0 是错误 |
-| url | 字符串 | 文档 URL，相对 URL 以它为基准解析 |
+| flags | `varuint` | bit 0 = 显式 ID。其余位非 0 是错误 |
 | nextId | `varuint` | 下一个可用 ID，只在显式 ID 时出现 |
 | root | 节点树 | 根节点必须是 Document |
 
-- 快照替换整个文档，回放端丢弃之前的全部状态。
-- 快照只包含 DOM 结构。表单的当前状态和滚动位置由紧随其后、时间相同的 Input 和 Scroll 事件给出，所以回放端从最近的快照开始，按顺序应用之后的全部事件，就能还原任意时刻的状态。
+- 快照替换整个文档，回放端丢弃之前的全部状态，包括构造样式表的编号（6.13）。
+- 快照只包含 DOM 结构。表单的当前状态、滚动位置、通过 CSSOM 改过的样式表和 adopted 样式表，由紧随其后、时间相同的 Input、Scroll、StyleSheet 和 AdoptedStyleSheets 事件给出，所以回放端从最近的快照开始，按顺序应用之后的全部事件，就能还原任意时刻的状态。
 - 录制端以时间切片的方式遍历 DOM，快照的时间是遍历**结束**的时刻；遍历期间发生的变化由同一时刻、紧随快照的 Mutations 事件补上。
 
 ### 6.6 Mutations（2）
@@ -209,6 +219,8 @@ Segment := Header Chunk*
 - 按字段顺序应用：先移除，再按顺序插入各段，再改属性，最后改文本。
 - 新增的节点按出现顺序分配 ID（6.3）。
 - 被移除的节点及其子树的 ID 不会再被引用。同一个节点再次插入时，会以新 ID 和完整的子树重新出现。
+- 给已有的元素附加 shadow root、往已有的 frame 里载入新文档，都写成单独的一段：Document 或 ShadowRoot 是这一段唯一的节点，beforeId 为 0，否则是错误。
+- 新的 Document 替换 frame 里原有的文档；移除 frame 的文档后，frame 显示空白。shadow root 不能移除，移除它的项被忽略；宿主已有 shadow root，或者不能附加 shadow root 时（与 `attachShadow` 的规则相同），新的 ShadowRoot 连同子树被忽略。
 - 回放端忽略引用未知 ID 的项，这样即使录制端漏掉了一些变化，后续回放也不会中断。
 
 ### 6.7 Input（3）
@@ -249,7 +261,7 @@ Segment := Header Chunk*
 
 ### 6.10 Scroll（6）
 
-`varuint` 个数，每项为 `varuint` 节点 ID、`varint` x、`varint` y，即该节点的 `scrollLeft` / `scrollTop`（取整的 CSS 像素）。节点 ID 是文档节点时表示视口滚动。
+`varuint` 个数，每项为 `varuint` 节点 ID、`varint` x、`varint` y，即该节点的 `scrollLeft` / `scrollTop`（取整的 CSS 像素）。节点 ID 是文档节点时表示这个文档的视口滚动：页面的，或者 frame 的。
 
 ### 6.11 Viewport（7）
 
@@ -257,7 +269,67 @@ Segment := Header Chunk*
 
 ### 6.12 Navigation（8）
 
-字符串：新的文档 URL。之后的相对 URL 以它为基准解析。
+`varuint` 文档节点 ID（页面的，或者 frame 的），然后是字符串：新的文档 URL。这个文档里之后的相对 URL 以它为基准解析。
+
+### 6.13 StyleSheet（9）
+
+通过 CSSOM（`insertRule`、`deleteRule`、`replace`、`replaceSync` 等）而不是标记改变的样式规则。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| owner | `u8` | 0：`<style>` 元素的样式表，ID 是元素的节点 ID；1：构造样式表（`new CSSStyleSheet()`），ID 是样式表编号。其他值是错误 |
+| id | `varuint` | 见 owner |
+| 变化 | `varuint` 个数，每项为 `u8` 类型及其内容 | 按顺序应用 |
+
+| 类型 | 内容 |
+|---|---|
+| 0 替换 | `varuint` 规则数，每条规则一个字符串：替换全部规则 |
+| 1 插入 | `varuint` 位置、规则字符串 |
+| 2 删除 | `varuint` 位置 |
+
+- 规则是顶层规则的 `cssText`。改变嵌套规则（例如 `@media` 里的规则）写成删除再插入它所在的顶层规则。未知的类型是错误。
+- 构造样式表按快照编号，从 1 开始；某个编号的第一个事件创建这个样式表。
+- 录制端第一次记录某个样式表时写替换，之后才写插入和删除。回放端某条规则解析失败时（例如别的引擎不认识的选择器），在同一位置放一条不生效的规则，让后续的位置仍然对得上。
+- `<style>` 元素的文本改变时，浏览器重新解析整个样式表，之前通过 CSSOM 的改变随之失效。
+
+### 6.14 AdoptedStyleSheets（10）
+
+`varuint` 文档或 shadow root 的节点 ID，`varuint` 个数，每项一个 `varuint` 构造样式表编号：替换它采用的样式表（`adoptedStyleSheets`），按顺序排列。回放端忽略不存在的编号。
+
+### 6.15 FontFace（11）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| family | 字符串 | 字体族名 |
+| 来源 | `u8` 类型，然后是内容 | 0：字符串，CSS `src` 的值，URL 已转成绝对 URL；1：`bytes`，字体文件。其他值是错误 |
+| 描述符 | `varuint` 个数，每项为名和值两个字符串 | `FontFace` 的描述符，如 `weight`、`unicodeRange` |
+
+回放端把整个录像里的字体加到回放的每个文档中，与时间无关。
+
+### 6.16 Asset（12）
+
+字符串 URL、字符串 MIME 类型、`bytes` 内容。录制端把回放时无法再加载的资源（`blob:` URL 只在页面存活期间有效）抓取下来；回放端把引用这个 URL 的地方换成自己生成的 URL。同样与时间无关。
+
+### 6.17 Console（13）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| level | `u8` | 0 debug，1 log，2 info，3 warn，4 error。其他值是错误 |
+| source | `u8` | 0 调用 `console` 的方法，1 未捕获的错误，2 未处理的 Promise 拒绝。其他值是错误 |
+| args | `varuint` 个数，每项一个字符串 | 各参数转成的文本 |
+| stack | 字符串 | 调用栈，没有时为空 |
+
+### 6.18 Network（14）
+
+字符串 initiator（`fetch`、`xmlhttprequest`、`beacon`，或者 Resource Timing 的 `initiatorType`）、字符串方法、字符串 URL、`varuint` HTTP 状态码（页面读不到响应时为 0）、`varuint` 耗时（毫秒）、`varuint` 接收的字节数（未知时为 0）、字符串错误信息（成功时为空）。事件在请求结束时写出，事件时间是结束时刻，开始时刻是它减去耗时。
+
+### 6.19 Perf（15）
+
+字符串指标名（如 `LCP`、`CLS`、`INP`）、`f64` 值、`varuint` 相关的节点 ID（没有时为 0）。
+
+### 6.20 Custom（16）
+
+字符串事件名、字符串数据（JSON 文本）。
 
 ## 7. 演进规则
 

@@ -4,7 +4,7 @@
         "path": "packages/protocol/dist/index.js",
         "import": "*",
         "gzip": true,
-        "limit": "6 kB"
+        "limit": "7 kB"
     },
     {
         "name": "@timecat-js/recorder (main thread)",

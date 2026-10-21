@@ -146,7 +146,7 @@ describe('Materializer', () => {
         expect(link.href).toBe('https://example.com/app/next.html')
         materializer.apply(mutations({ attributes: [{ id: 5, name: 'href', value: 'sub/' }] }))
         expect(link.href).toBe('https://example.com/app/sub/next.html')
-        materializer.apply({ type: EventType.Navigation, url: 'https://example.com/other/page' })
+        materializer.apply({ type: EventType.Navigation, id: 1, url: 'https://example.com/other/page' })
         expect(link.href).toBe('https://example.com/other/sub/next.html')
         materializer.apply(mutations({ removes: [5] }))
         expect(link.href).toBe('https://example.com/other/next.html')
