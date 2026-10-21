@@ -11,12 +11,13 @@ import {
     readChunk,
     readEventFrames,
     readFileHeader,
+    readMediaPackets,
     SegmentReader,
     Track,
     writeEventFrame
 } from '@timecat-js/protocol'
-import type { Chunk, FileHeader, IdCounter, TcrEvent } from '@timecat-js/protocol'
-import type { Keyframe, PointerTrail, TimelineIndex } from './types.ts'
+import type { Chunk, FileHeader, IdCounter, MediaStateEvent, MediaTrackEvent, TcrEvent } from '@timecat-js/protocol'
+import type { At, Keyframe, MediaIndex, PointerTrail, TimelineIndex } from './types.ts'
 import { VirtualDocument } from './virtual.ts'
 
 export interface IndexOptions {
@@ -258,6 +259,11 @@ class Indexer {
     #pointer = new PointerColumns()
     #statics = new ByteWriter()
     #data: Frame[] = []
+    #mediaTracks: At<MediaTrackEvent>[] = []
+    #mediaStates: At<MediaStateEvent>[] = []
+    #packets = new PacketColumns()
+    /** Media tracks whose packets cannot be decoded until their next key packet, because one is missing. */
+    readonly #brokenTracks = new Set<number>()
     #viewport: Keyframe['viewport']
     /** DOM events cannot be applied until the next snapshot, because an earlier one is missing. */
     #broken = false
@@ -307,10 +313,14 @@ class Indexer {
             this.#moveEdge(segment.sync)
             return
         }
-        if (chunk.kind !== ChunkKind.Events) {
+        if (chunk.kind !== ChunkKind.Events && chunk.kind !== ChunkKind.Media) {
             return
         }
         this.#chunkEnd = Math.max(this.#chunkEnd, offset + chunk.startTime + chunk.duration)
+        if (chunk.kind === ChunkKind.Media) {
+            this.#media(segment, chunk, payload)
+            return
+        }
         let frames
         try {
             if (payload === undefined) {
@@ -338,6 +348,40 @@ class Indexer {
                 // Order does not matter for these: they hold for the whole recording, or are kept in time order.
                 this.#index(frame, { next: 0 })
             }
+        }
+    }
+
+    /** Indexes the packets of a media chunk, which need no order but their own. */
+    #media(segment: OpenSegment, chunk: Chunk, payload: Uint8Array | undefined): void {
+        const { track } = chunk
+        this.#changed = true
+        let packets
+        try {
+            if (payload === undefined) {
+                throw new Error('its payload is not valid gzip data')
+            }
+            packets = readMediaPackets(payload, chunk.startTime)
+        } catch (error) {
+            this.#warnings.push(
+                `chunk ${chunk.sequence} of segment ${segment.header.segment} cannot be read (${describe(error)}); ` +
+                    'its media is left out'
+            )
+            this.#brokenTracks.add(track)
+            return
+        }
+        for (const packet of packets) {
+            if (packet.key) {
+                this.#brokenTracks.delete(track)
+            } else if (this.#brokenTracks.has(track)) {
+                continue
+            }
+            this.#packets.push(
+                track,
+                segment.offset + packet.time / 1000,
+                packet.duration / 1000,
+                packet.key,
+                packet.data
+            )
         }
     }
 
@@ -376,8 +420,11 @@ class Indexer {
             pointer: this.#pointer.finish(),
             statics: this.#statics.finish(),
             data: data.finish(),
+            media: { tracks: this.#mediaTracks, states: this.#mediaStates, packets: this.#packets.take() },
             warnings: this.#warnings
         }
+        this.#mediaTracks = []
+        this.#mediaStates = []
         this.#keyframes = []
         this.#compressions = []
         this.#pointer = new PointerColumns()
@@ -450,6 +497,15 @@ class Indexer {
         }
         if (ids !== this.#ids) {
             // A page event on a track of another kind, which the replay has no place for.
+            return
+        }
+        // The media's own timelines, which the player reads at any time.
+        if (event.type === EventType.MediaTrack) {
+            this.#mediaTracks.push({ time, event })
+            return
+        }
+        if (event.type === EventType.MediaState) {
+            this.#mediaStates.push({ time, event })
             return
         }
         if (event.type === EventType.Snapshot) {
@@ -563,6 +619,55 @@ class EventColumns {
         this.#idBases = []
         this.#bodies = []
         this.#costs = [costs[costs.length - 1]!]
+        this.#size = 0
+        return table
+    }
+}
+
+/** Collects the packets of media tracks, a part at a time. */
+class PacketColumns {
+    readonly #tracks: number[] = []
+    readonly #times: number[] = []
+    readonly #durations: number[] = []
+    readonly #keys: number[] = []
+    readonly #data: Uint8Array[] = []
+    #size = 0
+
+    push(track: number, time: number, duration: number, key: boolean, data: Uint8Array): void {
+        this.#tracks.push(track)
+        this.#times.push(time)
+        this.#durations.push(duration)
+        this.#keys.push(key ? 1 : 0)
+        this.#data.push(data)
+        this.#size += data.length
+    }
+
+    /** The packets so far; the next part starts empty. */
+    take(): MediaIndex['packets'] {
+        const count = this.#tracks.length
+        const offsets = new Uint32Array(count)
+        const lengths = new Uint32Array(count)
+        const data = new Uint8Array(this.#size)
+        let offset = 0
+        for (const [i, packet] of this.#data.entries()) {
+            offsets[i] = offset
+            lengths[i] = packet.length
+            data.set(packet, offset)
+            offset += packet.length
+        }
+        const table = {
+            count,
+            tracks: Uint32Array.from(this.#tracks),
+            times: Float64Array.from(this.#times),
+            durations: Float64Array.from(this.#durations),
+            keys: Uint8Array.from(this.#keys),
+            offsets,
+            lengths,
+            data
+        }
+        for (const column of [this.#tracks, this.#times, this.#durations, this.#keys, this.#data]) {
+            column.length = 0
+        }
         this.#size = 0
         return table
     }

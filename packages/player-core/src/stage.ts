@@ -69,6 +69,11 @@ export class Stage {
         this.#observer = new ResizeObserver(() => this.#layout())
     }
 
+    /** The document of the container, outside the replay. */
+    get ownerDocument(): Document {
+        return this.#host.ownerDocument
+    }
+
     /** Adds a stage to `container`, once its document is ready to build in. */
     static async create(container: Element): Promise<Stage> {
         const stage = new Stage(container)

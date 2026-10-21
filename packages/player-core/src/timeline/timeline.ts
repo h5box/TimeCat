@@ -1,7 +1,17 @@
 import { decodeEvent, EventType } from '@timecat-js/protocol'
-import type { TcrEvent, ViewportEvent } from '@timecat-js/protocol'
+import type { MediaStateEvent, MediaTrackEvent, TcrEvent, ViewportEvent } from '@timecat-js/protocol'
 import { upperBound } from '../search.ts'
-import type { Keyframe, PointerTrail, TimelineIndex } from './types.ts'
+import type { At, Keyframe, PointerTrail, TimelineIndex } from './types.ts'
+
+/** The packets of a media track, in decode order. */
+export interface TrackPackets {
+    /** Milliseconds on the timeline's clock, with a fraction. */
+    readonly times: number[]
+    /** Milliseconds; 0 when unknown. */
+    readonly durations: number[]
+    readonly keys: boolean[]
+    readonly data: Uint8Array<ArrayBuffer>[]
+}
 
 /**
  * The player's view of an index: finds events and keyframes, and decodes events when they are applied. A recording
@@ -23,6 +33,13 @@ export class Timeline {
     readonly statics: Uint8Array[] = []
     /** Console, Network, Perf and Custom events, as events chunk payloads, a part at a time. */
     readonly data: Uint8Array[] = []
+    /** Declarations of media tracks, in time order. */
+    readonly mediaTracks: At<MediaTrackEvent>[] = []
+    /** The playback state of media elements, in time order. */
+    readonly mediaStates: At<MediaStateEvent>[] = []
+    readonly #packets = new Map<number, TrackPackets>()
+    /** Times of the recorded snapshots, after which the ids of the nodes before may stand for others. */
+    readonly #snapshotTimes: number[] = []
     #count = 0
     readonly #times = new Column(length => new Float64Array(length))
     readonly #types = new Column(length => new Uint8Array(length))
@@ -77,6 +94,26 @@ export class Timeline {
         for (const keyframe of part.keyframes) {
             this.keyframes.push(keyframe)
             this.#keyframeIndexes.push(keyframe.index)
+            if (keyframe.recorded) {
+                this.#snapshotTimes.push(keyframe.time)
+            }
+        }
+        const { media } = part
+        this.mediaTracks.push(...media.tracks)
+        this.mediaStates.push(...media.states)
+        const { packets } = media
+        for (let i = 0; i < packets.count; i++) {
+            const track = packets.tracks[i]!
+            let columns = this.#packets.get(track)
+            if (columns === undefined) {
+                columns = { times: [], durations: [], keys: [], data: [] }
+                this.#packets.set(track, columns)
+            }
+            const offset = packets.offsets[i]!
+            columns.times.push(packets.times[i]!)
+            columns.durations.push(packets.durations[i]!)
+            columns.keys.push(packets.keys[i] === 1)
+            columns.data.push(packets.data.subarray(offset, offset + packets.lengths[i]!))
         }
         this.#pointer.add(part.pointer)
         this.#buttons.add(part.pointer.buttons)
@@ -88,6 +125,21 @@ export class Timeline {
             this.data.push(part.data)
         }
         this.warnings.push(...part.warnings)
+    }
+
+    /** Whether there are media tracks or media elements to play. */
+    get hasMedia(): boolean {
+        return this.mediaTracks.length > 0 || this.mediaStates.length > 0
+    }
+
+    /** The packets of a media track so far. */
+    packets(track: number): TrackPackets | undefined {
+        return this.#packets.get(track)
+    }
+
+    /** Time of the last recorded snapshot at or before `time`, or -Infinity. */
+    snapshotBefore(time: number): number {
+        return this.#snapshotTimes[upperBound(this.#snapshotTimes, time) - 1] ?? -Infinity
     }
 
     /** Takes it that nothing more is to come, such as when indexing failed. */

@@ -9,9 +9,17 @@ import {
     Track,
     writeChunk,
     writeEventFrame,
-    writeFileHeader
+    writeFileHeader,
+    writeMediaPacket
 } from '@timecat-js/protocol'
-import type { DocumentNode, SegmentInfo, SerializedNode, SnapshotEvent, TcrEvent } from '@timecat-js/protocol'
+import type {
+    DocumentNode,
+    MediaPacket,
+    SegmentInfo,
+    SerializedNode,
+    SnapshotEvent,
+    TcrEvent
+} from '@timecat-js/protocol'
 import { isDocument, isInput, isShadowRoot, isStyle, isTextArea } from '../src/dom.ts'
 
 /**
@@ -112,7 +120,9 @@ const TRACKS: Record<number, number> = {
     [EventType.Console]: Track.Console,
     [EventType.Network]: Track.Network,
     [EventType.Perf]: Track.Perf,
-    [EventType.Custom]: Track.Custom
+    [EventType.Custom]: Track.Custom,
+    [EventType.MediaTrack]: Track.Media,
+    [EventType.MediaState]: Track.Media
 }
 
 export const SESSION: SegmentInfo = { sessionId: 'player-test', segment: 0, startedAt: 1_760_000_000_000, meta: {} }
@@ -144,6 +154,30 @@ export function writeRecording(
 /** The chunks `writeRecording` writes, without the header, as a stream goes on after it. */
 export function writeChunks(events: readonly Timed[], firstSequence: number): Uint8Array<ArrayBuffer> {
     return writeRecording(events, {}, firstSequence).slice(writeRecording([]).length)
+}
+
+/** A media chunk of `track` with `packets`, which start with a key packet when it is a keyframe. */
+export function writeMedia(track: number, packets: readonly MediaPacket[], sequence: number): Uint8Array<ArrayBuffer> {
+    const payload = new ByteWriter()
+    const startTime = Math.floor(packets[0]!.time / 1000)
+    let previous = startTime * 1000
+    let end = startTime
+    for (const packet of packets) {
+        writeMediaPacket(payload, packet, previous)
+        previous = packet.time
+        end = Math.max(end, Math.ceil((packet.time + packet.duration) / 1000))
+    }
+    const writer = new ByteWriter()
+    writeChunk(writer, {
+        kind: ChunkKind.Media,
+        track,
+        flags: packets[0]!.key ? ChunkFlag.Keyframe : 0,
+        sequence,
+        startTime,
+        duration: end - startTime,
+        payload: payload.finish()
+    })
+    return writer.finish()
 }
 
 /** A sync chunk: page events after it come at `time` or later. */

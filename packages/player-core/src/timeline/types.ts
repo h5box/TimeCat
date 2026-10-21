@@ -1,3 +1,5 @@
+import type { MediaStateEvent, MediaTrackEvent } from '@timecat-js/protocol'
+
 /**
  * What the indexer hands the player: events in replay order with their bodies still encoded, the keyframes to seek
  * from and the pointer trail. Made of typed arrays, so it moves from the worker without a copy. A recording that
@@ -29,8 +31,40 @@ export interface TimelineIndex {
      * apply them, so `events` leaves them out.
      */
     data: Uint8Array<ArrayBuffer>
+    /** Media tracks, their packets and the playback state of media elements. */
+    media: MediaIndex
     /** Problems the recording was read despite, such as a truncated last chunk. */
     warnings: string[]
+}
+
+/** Something recorded at a time, on the timeline's clock. */
+export interface At<T> {
+    time: number
+    event: T
+}
+
+export interface MediaIndex {
+    /** MediaTrack events, in replay order. */
+    tracks: At<MediaTrackEvent>[]
+    /** MediaState events, in replay order. */
+    states: At<MediaStateEvent>[]
+    packets: PacketTable
+}
+
+/** Packets of media tracks as their chunks came, those of each track in decode order. */
+interface PacketTable {
+    count: number
+    tracks: Uint32Array<ArrayBuffer>
+    /** Milliseconds on the timeline's clock, with a fraction. */
+    times: Float64Array<ArrayBuffer>
+    /** Milliseconds; 0 when unknown. */
+    durations: Float64Array<ArrayBuffer>
+    /** 1 for a packet decoding can start from. */
+    keys: Uint8Array<ArrayBuffer>
+    offsets: Uint32Array<ArrayBuffer>
+    lengths: Uint32Array<ArrayBuffer>
+    /** Every packet, back to back. */
+    data: Uint8Array<ArrayBuffer>
 }
 
 /**
@@ -97,6 +131,7 @@ interface ButtonTrail {
 /** Buffers of an index, for transferring it. */
 export function transferables(index: TimelineIndex): ArrayBuffer[] {
     const { events, pointer } = index
+    const { packets } = index.media
     const buffers = [
         events.times,
         events.types,
@@ -112,7 +147,14 @@ export function transferables(index: TimelineIndex): ArrayBuffer[] {
         pointer.buttons.times,
         pointer.buttons.actions,
         pointer.buttons.xs,
-        pointer.buttons.ys
+        pointer.buttons.ys,
+        packets.tracks,
+        packets.times,
+        packets.durations,
+        packets.keys,
+        packets.offsets,
+        packets.lengths,
+        packets.data
     ].map(array => array.buffer)
     buffers.push(index.statics.buffer, index.data.buffer)
     for (const keyframe of index.keyframes) {

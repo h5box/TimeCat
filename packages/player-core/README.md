@@ -63,6 +63,7 @@ to where it ends, and `player.warnings` says what was left out.
 | `duration`, `currentTime` | In milliseconds from the first recorded event. |
 | `live` | More of the recording is to come, from a stream. |
 | `paused`, `speed` | Playback state; `speed` can be changed while playing. |
+| `volume`, `muted` | How loud recorded media and narration play, from 0 to 1, and whether they are silent. A browser that does not let them play with sound before the viewer interacted with the page makes the player mute itself. |
 | `play()`, `pause()` | Play from the current time, or from the start once ended; while live, at the edge, wait for more. |
 | `seek(time)` | Resolves once the replay shows `time`, or a later time asked for meanwhile. |
 | `document` | The replayed document, to look at. Changing it breaks the replay. |
@@ -70,8 +71,8 @@ to where it ends, and `player.warnings` says what was left out.
 | `warnings` | Problems the recording was read despite. |
 | `destroy()` | Stops playing and removes the replay from its container. |
 
-It dispatches `play`, `pause`, `ended`, `timeupdate` (while playing and after each seek) and `durationchange` (when
-more of a live recording came, and when it ended).
+It dispatches `play`, `pause`, `ended`, `timeupdate` (while playing and after each seek), `durationchange` (when
+more of a live recording came, and when it ended) and `volumechange`.
 
 ## How it works
 
@@ -115,6 +116,15 @@ attributes are filtered: event handlers, `javascript:` URLs, `autofocus`, `autop
 of frames are left out. Scripts are kept, with a type no browser runs. The frame is `inert` and covered by a shield,
 so the viewer's clicks and keys never reach the recorded page.
 
+**Media.** The player's media code loads only for recordings that have some. Media packets are kept apart from the
+events, per track. A video track encoded with WebCodecs is decoded with `VideoDecoder`, from the last key packet
+before the time shown, and drawn into the replayed `<canvas>` it belongs to. A container track, such as what
+`MediaRecorder` made, plays through Media Source Extensions, or from a blob made anew now and then where those do
+not take its type: in the replayed `<audio>` or `<video>` it belongs to, or in an element of the player's own, whose
+frames are drawn into the replayed `<canvas>` it belongs to, and which plays a narration that belongs to no element.
+Replayed media elements without a track of their own follow their recorded playback state: position, rate, volume
+and whether they play, from their source URL. Media follow the replay's time, speed, volume and muting.
+
 **URLs.** Relative URLs resolve against the recorded page's URL, or its first `<base>` element, through a `<base>`
 element the player keeps first in the head. Images, styles and fonts load from where the recorded page had them,
 except what lived only in the recorded page: the content of its `blob:` URLs comes from the recording, served from
@@ -137,8 +147,10 @@ The last two versions of Chrome, Edge, Firefox and Safari.
 
 ## Limitations
 
-- Frames the recorder could not read, such as cross-origin ones, show a blank page, and canvas, video and audio
-  content is not replayed.
+- Frames the recorder could not read, such as cross-origin ones, show a blank page.
+- Canvas content shows only where `@timecat-js/plugin-canvas` recorded it, and the pixels of a `<video>` only where
+  `@timecat-js/plugin-media` captured them; otherwise media elements play their own source again. Audio tracks
+  encoded with WebCodecs are not played.
 - Resources load at replay time: whatever has changed or gone since, or does not allow cross-origin use (fonts
   without CORS headers, for example), shows differently.
 - States the recording does not capture are not shown: `:hover` and focus styles, open dialogs and popovers in the

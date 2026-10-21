@@ -10,6 +10,7 @@ import type {
 } from '@timecat-js/protocol'
 import { Assets } from './assets.ts'
 import { Materializer } from './materializer.ts'
+import type { MediaPlayer } from './media/media.ts'
 import { pointerAt } from './pointer.ts'
 import { Stage } from './stage.ts'
 import type { SegmentSource } from './timeline/build.ts'
@@ -60,8 +61,8 @@ export interface TimedEvent {
 
 /**
  * Plays a recording in a sandboxed frame. Times are in milliseconds from the first recorded event. Dispatches
- * `play`, `pause`, `ended`, `timeupdate` while playing and after seeking, and `durationchange` when more of a live
- * recording came or it ended.
+ * `play`, `pause`, `ended`, `timeupdate` while playing and after seeking, `durationchange` when more of a live
+ * recording came or it ended, and `volumechange`.
  */
 export interface Player extends EventTarget {
     readonly sessionId: string
@@ -82,6 +83,13 @@ export interface Player extends EventTarget {
     readonly paused: boolean
     /** Playback rate; 1 is real time. */
     speed: number
+    /** Volume of the recorded media, from 0 to 1, on top of the volume they were recorded at. 1 by default. */
+    volume: number
+    /**
+     * Mutes the recorded media. A browser that lets no media play with sound before the viewer interacted with the
+     * page mutes the player, and it plays muted until unmuted, which a click on a control of its own can do.
+     */
+    muted: boolean
     /** The replayed document, to look at: changing it breaks the replay. */
     readonly document: Document
     /** Console messages, requests, measurements and events of the application so far, in time order. */
@@ -248,6 +256,11 @@ class ReplayPlayer extends EventTarget implements Player {
     #retry = 0
     /** A keyframe being decompressed, after which the document catches up with `#time`. */
     #loading: Promise<void> | undefined
+    #volume = 1
+    #muted = false
+    /** Plays the media, once loaded: only recordings with media load it. */
+    #media: MediaPlayer | undefined
+    #mediaLoading = false
     #events: readonly TimedEvent[] = []
     /** Data payloads of the timeline that `#events` holds. */
     #eventParts = 0
@@ -269,6 +282,7 @@ class ReplayPlayer extends EventTarget implements Player {
         this.#firstViewport = timeline.firstViewport()
         this.#time = this.#start
         this.#speed = speed
+        this.#loadMedia()
     }
 
     get sessionId(): string {
@@ -316,6 +330,33 @@ class ReplayPlayer extends EventTarget implements Player {
         this.#speed = value
     }
 
+    get volume(): number {
+        return this.#volume
+    }
+
+    set volume(value: number) {
+        if (!(value >= 0 && value <= 1)) {
+            throw new RangeError(`volume must be from 0 to 1, got ${value}`)
+        }
+        if (value !== this.#volume) {
+            this.#volume = value
+            this.#showMedia()
+            this.dispatchEvent(new Event('volumechange'))
+        }
+    }
+
+    get muted(): boolean {
+        return this.#muted
+    }
+
+    set muted(value: boolean) {
+        if (value !== this.#muted) {
+            this.#muted = value
+            this.#showMedia()
+            this.dispatchEvent(new Event('volumechange'))
+        }
+    }
+
     get document(): Document {
         return this.#document
     }
@@ -343,6 +384,7 @@ class ReplayPlayer extends EventTarget implements Player {
         const timeline = this.#timeline
         timeline.append(part)
         this.#firstViewport ??= timeline.firstViewport()
+        this.#loadMedia()
         if (part.statics.length > 0) {
             this.#assets.add(readEvents(part.statics))
             // What the document shows may use them: it is built again.
@@ -407,6 +449,7 @@ class ReplayPlayer extends EventTarget implements Player {
         this.#stage.destroy()
         this.#assets.revoke()
         this.#snapshots.clear()
+        this.#media?.destroy()
         this.onDestroy()
     }
 
@@ -455,6 +498,49 @@ class ReplayPlayer extends EventTarget implements Player {
         this.#playing = false
         cancelAnimationFrame(this.#frame)
         this.#frame = 0
+        this.#showMedia()
+    }
+
+    #loadMedia(): void {
+        if (!this.#mediaLoading && this.#timeline.hasMedia) {
+            this.#mediaLoading = true
+            void this.#startMedia()
+        }
+    }
+
+    async #startMedia(): Promise<void> {
+        try {
+            const { MediaPlayer } = await import('./media/media.ts')
+            if (this.#destroyed) {
+                return
+            }
+            this.#media = new MediaPlayer({
+                timeline: this.#timeline,
+                node: id => this.#materializer.node(id),
+                document: this.#stage.ownerDocument,
+                onError: this.#onError,
+                onBlocked: () => {
+                    this.muted = true
+                }
+            })
+            this.#showMedia()
+        } catch (error) {
+            this.#onError(error)
+        }
+    }
+
+    /** Brings the media to the time shown. */
+    #showMedia(): void {
+        if (this.#destroyed) {
+            return
+        }
+        this.#media?.show({
+            time: this.#time,
+            playing: this.#playing,
+            speed: this.#speed,
+            volume: this.#volume,
+            muted: this.#muted
+        })
     }
 
     /** Shows `#time`. Resolves once the document shows it, or a later time asked for meanwhile. */
@@ -508,6 +594,7 @@ class ReplayPlayer extends EventTarget implements Player {
         }
         this.#advance(target)
         this.#flushScrolls()
+        this.#showMedia()
         return undefined
     }
 

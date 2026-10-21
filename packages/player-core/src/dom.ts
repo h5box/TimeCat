@@ -73,3 +73,12 @@ export function isStyle(element: Element): element is HTMLStyleElement | SVGStyl
         (element.namespaceURI === HTML_NAMESPACE || element.namespaceURI === SVG_NAMESPACE)
     )
 }
+
+export function isCanvas(element: Element): element is HTMLCanvasElement {
+    return isHtml(element, 'canvas')
+}
+
+/** `<audio>` and `<video>`. */
+export function isMedia(element: Element): element is HTMLMediaElement {
+    return isHtml(element, 'video') || isHtml(element, 'audio')
+}

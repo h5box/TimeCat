@@ -6,6 +6,7 @@ import {
     EventType,
     gunzip,
     InputKind,
+    MediaKind,
     PointerAction,
     PointerType,
     readEventFrames,
@@ -14,7 +15,7 @@ import {
     Track,
     writeChunk
 } from '@timecat-js/protocol'
-import type { TcrEvent } from '@timecat-js/protocol'
+import type { MediaPacket, TcrEvent } from '@timecat-js/protocol'
 import * as fc from 'fast-check'
 import { describe, expect, it, vi } from 'vitest'
 import { buildIndex, StreamIndexer } from '../src/timeline/build.ts'
@@ -30,6 +31,7 @@ import {
     pageOf,
     SESSION,
     writeChunks,
+    writeMedia,
     writeRecording,
     writeSync
 } from './recording.ts'
@@ -570,5 +572,68 @@ describe('StreamIndexer', () => {
         await finished()
         expect(joined(parts).types).toEqual([EventType.Snapshot])
         expect(parts.flatMap(part => part.warnings)).toEqual([expect.stringContaining('the recording is cut short')])
+    })
+})
+
+function packet(time: number, key: boolean, byte: number): MediaPacket {
+    return { time, duration: 40_000, key, data: new Uint8Array([byte]) }
+}
+
+describe('media', () => {
+    const declaration: TcrEvent = {
+        type: EventType.MediaTrack,
+        track: 256,
+        kind: MediaKind.Video,
+        targetId: 6,
+        codec: 'vp8',
+        description: new Uint8Array(0),
+        container: '',
+        width: 64,
+        height: 48,
+        sampleRate: 0,
+        channels: 0
+    }
+    const state: TcrEvent = {
+        type: EventType.MediaState,
+        id: 6,
+        paused: false,
+        muted: true,
+        currentTime: 1.5,
+        playbackRate: 1,
+        volume: 1
+    }
+    it('keeps media declarations, element states and packets apart from the events', async () => {
+        const recording = concat(
+            writeRecording([
+                { time: 0, event: page },
+                { time: 10, event: declaration },
+                { time: 20, event: state }
+            ]),
+            writeMedia(256, [packet(10_500, true, 1), packet(50_500, false, 2)], 3),
+            // A chunk that cannot be read: the packets after it wait for the next key packet.
+            writeMedia(256, [packet(90_000, false, 3)], 4).map((byte, i, bytes) =>
+                i === bytes.length - 2 ? 0x80 : byte
+            ),
+            writeMedia(256, [packet(130_000, false, 4), packet(170_000, true, 5)], 5),
+            writeMedia(257, [packet(0, true, 6)], 6)
+        )
+        const index = await buildIndex([recording], options)
+        expect(typesOf(index)).toEqual([EventType.Snapshot])
+        expect(index.media.tracks).toEqual([{ time: 10, event: declaration }])
+        expect(index.media.states).toEqual([{ time: 20, event: state }])
+        const { packets } = index.media
+        expect([...packets.tracks]).toEqual([256, 256, 256, 257])
+        expect([...packets.times]).toEqual([10.5, 50.5, 170, 0])
+        expect([...packets.durations]).toEqual([40, 40, 40, 40])
+        expect([...packets.keys]).toEqual([1, 0, 1, 1])
+        expect([...packets.lengths].map((length, i) => packets.data[packets.offsets[i]!])).toEqual([1, 2, 5, 6])
+        expect(index.warnings).toEqual([expect.stringContaining('its media is left out')])
+        // Media count towards the length of the recording.
+        expect(index.end).toBe(210)
+        const timeline = new Timeline(index)
+        expect(timeline.hasMedia).toBe(true)
+        expect(timeline.packets(256)).toMatchObject({ times: [10.5, 50.5, 170], keys: [true, false, true] })
+        expect(timeline.snapshotBefore(5)).toBe(0)
+        expect(timeline.snapshotBefore(-1)).toBe(-Infinity)
     })
 })
