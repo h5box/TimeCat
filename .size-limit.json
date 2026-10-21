@@ -12,5 +12,12 @@
         "import": "{ record }",
         "gzip": true,
         "limit": "15 kB"
+    },
+    {
+        "name": "@timecat-js/player-core (lazy chunks and worker included)",
+        "path": "packages/player-core/dist/index.js",
+        "import": "{ createPlayer }",
+        "gzip": true,
+        "limit": "22 kB"
     }
 ]

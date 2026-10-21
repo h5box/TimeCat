@@ -1,0 +1,61 @@
+{
+    "name": "@timecat-js/player-core",
+    "version": "0.0.0",
+    "description": "Headless TimeCat replay engine: timeline, keyframe seek index and DOM materialization in a script-free sandbox",
+    "keywords": [
+        "replay",
+        "rrweb",
+        "session-replay",
+        "timecat"
+    ],
+    "homepage": "https://github.com/h5box/TimeCat/tree/master/packages/player-core#readme",
+    "bugs": "https://github.com/h5box/TimeCat/issues",
+    "license": "GPL-3.0-or-later",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/h5box/TimeCat.git",
+        "directory": "packages/player-core"
+    },
+    "files": [
+        "dist"
+    ],
+    "type": "module",
+    "sideEffects": false,
+    "exports": {
+        ".": {
+            "@timecat-js/source": "./src/index.ts",
+            "default": "./dist/index.js"
+        },
+        "./package.json": "./package.json",
+        "./worker": {
+            "types": "./dist/worker.d.ts",
+            "default": "./dist/worker.js"
+        }
+    },
+    "publishConfig": {
+        "exports": {
+            ".": "./dist/index.js",
+            "./package.json": "./package.json",
+            "./worker": {
+                "types": "./dist/worker.d.ts",
+                "default": "./dist/worker.js"
+            }
+        }
+    },
+    "scripts": {
+        "build": "tsdown",
+        "typecheck": "tsc -p .",
+        "prepack": "node -e \"require('node:fs').copyFileSync('../../LICENSE', 'LICENSE')\""
+    },
+    "dependencies": {
+        "@timecat-js/protocol": "workspace:^"
+    },
+    "devDependencies": {
+        "@arethetypeswrong/core": "catalog:",
+        "fast-check": "catalog:",
+        "publint": "catalog:",
+        "tsdown": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:"
+    }
+}
