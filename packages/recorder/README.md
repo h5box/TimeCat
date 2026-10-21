@@ -67,6 +67,7 @@ Plugins record what happens beside the page, each on a track of its own:
 | [`@timecat-js/plugin-network`](../plugin-network) | Requests made with `fetch`, `XMLHttpRequest` and `sendBeacon`, and the resources the page loads. |
 | [`@timecat-js/plugin-perf`](../plugin-perf) | LCP, CLS, INP, FCP, TTFB and long animation frames. |
 | [`@timecat-js/plugin-canvas`](../plugin-canvas) | What 2D and WebGL canvases show, as video. |
+| [`@timecat-js/plugin-media`](../plugin-media) | How `<audio>` and `<video>` elements play, what videos show, and narration from the microphone. |
 
 ```ts
 import { consolePlugin } from '@timecat-js/plugin-console'
