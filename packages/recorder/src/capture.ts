@@ -171,8 +171,11 @@ export class Capture implements EventListenerObject {
                         Math.round(event.clientX),
                         Math.round(event.clientY)
                     )
+                    this.#awaitMoves()
                 }
-                break
+                // Moves need no flush until they span long enough to be written. A flush per move would keep
+                // the page rendering frames for as long as the pointer moves, and input waiting for them.
+                return
             case 'pointerdown':
             case 'pointerup':
             case 'pointercancel':
@@ -295,8 +298,12 @@ export class Capture implements EventListenerObject {
         } catch (error) {
             this.#options.onError(error)
         }
-        if (this.#pointer.pending && this.#movesTimer === undefined) {
-            // Moves are written once they span long enough, which a later flush has to notice.
+        this.#awaitMoves()
+    }
+
+    /** Moves are written once they span long enough, which a flush then has to notice. */
+    #awaitMoves(): void {
+        if (this.#pointer.pending && this.#movesTimer === undefined && !this.#stopped) {
             this.#movesTimer = setTimeout(this.#movesDue, MAX_MOVES_SPAN)
         }
     }

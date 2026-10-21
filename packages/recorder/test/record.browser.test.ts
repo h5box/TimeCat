@@ -1,6 +1,6 @@
 import { EventType, NodeKind, Track } from '@timecat-js/protocol'
 import type { SerializedNode } from '@timecat-js/protocol'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { record } from '../src/index.ts'
 import type { RecordOptions } from '../src/index.ts'
 import { OPFS_DIRECTORY } from '../src/pipeline/storage.ts'
@@ -80,6 +80,21 @@ describe('record', () => {
         const blob = await recorder.stop()
         const streamed = new Blob(parts.map(part => new Uint8Array(part)))
         expect(new Uint8Array(await streamed.arrayBuffer())).toEqual(new Uint8Array(await blob.arrayBuffer()))
+    })
+
+    it('records pointer moves in batches, without a frame per move', async () => {
+        const recorder = record()
+        await recorder.ready
+        await nextFrame()
+        const frames = vi.spyOn(window, 'requestAnimationFrame')
+        for (let i = 0; i < 10; i++) {
+            window.dispatchEvent(new PointerEvent('pointermove', { clientX: i, clientY: 2 * i, isPrimary: true }))
+        }
+        expect(frames).not.toHaveBeenCalled()
+        frames.mockRestore()
+        const moves = eventsOf((await decodeRecording(await recorder.stop())).events, EventType.PointerMoves)
+        expect(moves.flatMap(batch => batch.xs)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+        expect(moves.flatMap(batch => batch.ys)).toEqual([0, 2, 4, 6, 8, 10, 12, 14, 16, 18])
     })
 
     it('exports the recording so far and keeps recording', async () => {
