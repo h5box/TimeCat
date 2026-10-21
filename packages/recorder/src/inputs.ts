@@ -8,7 +8,7 @@ import type { Privacy } from './privacy.ts'
 
 /**
  * Records the state of form controls: values, checked state and selected options. Controls are marked when
- * they may have changed; their state is read when the input event is written, at most once per frame.
+ * they may have changed; their state is read when the input event is written, once per flush.
  */
 export class InputRecorder {
     readonly #ids: NodeIds

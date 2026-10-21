@@ -1,5 +1,5 @@
 import { BatchWriter } from './batch.ts'
-import { Capture, nextFrame, yieldToPage } from './capture.ts'
+import { afterTask, Capture, yieldToPage } from './capture.ts'
 import { PipelineClient } from './client.ts'
 import type { StorageKind } from './pipeline/messages.ts'
 import type { PrivacyOptions } from './privacy.ts'
@@ -74,7 +74,7 @@ export function record(options: RecordOptions = {}): Recorder {
         sliceMs: SLICE_MS,
         checkEvery: CHECK_EVERY,
         yieldToPage,
-        scheduleFlush: nextFrame,
+        scheduleFlush: afterTask,
         onHidden: () => client.flush(),
         onError
     })

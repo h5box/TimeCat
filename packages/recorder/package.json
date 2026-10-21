@@ -1,7 +1,7 @@
 {
     "name": "@timecat-js/recorder",
     "version": "0.0.0",
-    "description": "TimeCat session recorder: time-sliced DOM snapshots, per-frame mutations, input, pointer and scroll, encoded and compressed off the main thread",
+    "description": "TimeCat session recorder: time-sliced DOM snapshots, coalesced DOM changes, input, pointer and scroll, compressed and stored off the main thread",
     "keywords": [
         "recording",
         "rrweb",

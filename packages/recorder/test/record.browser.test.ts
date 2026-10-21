@@ -1,6 +1,6 @@
 import { EventType, NodeKind, Track } from '@timecat-js/protocol'
 import type { SerializedNode } from '@timecat-js/protocol'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { record } from '../src/index.ts'
 import type { RecordOptions } from '../src/index.ts'
 import { OPFS_DIRECTORY } from '../src/pipeline/storage.ts'
@@ -82,16 +82,39 @@ describe('record', () => {
         expect(new Uint8Array(await streamed.arrayBuffer())).toEqual(new Uint8Array(await blob.arrayBuffer()))
     })
 
-    it('records pointer moves in batches, without a frame per move', async () => {
+    it('writes the changes of every animation frame', async () => {
         const recorder = record()
         await recorder.ready
+        const div = document.createElement('div')
+        document.body.append(div)
+        added.push(div)
+        // Changes made before the insertion is written are written as part of it.
         await nextFrame()
-        const frames = vi.spyOn(window, 'requestAnimationFrame')
+        // Changes made by animation frame callbacks, as animations make them.
+        await new Promise<void>(resolve => {
+            let frame = 0
+            const tick = (): void => {
+                div.dataset.frame = String(++frame)
+                if (frame < 10) {
+                    requestAnimationFrame(tick)
+                } else {
+                    resolve()
+                }
+            }
+            requestAnimationFrame(tick)
+        })
+        const changes = eventsOf((await decodeRecording(await recorder.stop())).events, EventType.Mutations)
+            .flatMap(event => event.attributes)
+            .filter(change => change.name === 'data-frame')
+        expect(changes.map(change => change.value)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10'])
+    })
+
+    it('records pointer moves in batches', async () => {
+        const recorder = record()
+        await recorder.ready
         for (let i = 0; i < 10; i++) {
             window.dispatchEvent(new PointerEvent('pointermove', { clientX: i, clientY: 2 * i, isPrimary: true }))
         }
-        expect(frames).not.toHaveBeenCalled()
-        frames.mockRestore()
         const moves = eventsOf((await decodeRecording(await recorder.stop())).events, EventType.PointerMoves)
         expect(moves.flatMap(batch => batch.xs)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
         expect(moves.flatMap(batch => batch.ys)).toEqual([0, 2, 4, 6, 8, 10, 12, 14, 16, 18])

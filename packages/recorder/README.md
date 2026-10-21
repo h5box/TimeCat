@@ -64,12 +64,13 @@ between (`scheduler.yield`, or a message task where that is missing), so a large
 mutation observer is attached first: nodes that move or appear while the snapshot is taken are left to the changes
 written right after it.
 
-**Changes.** Mutations, form state, scroll offsets, the viewport size and the URL are collected and written once per
-animation frame, coalesced: however often a node, an attribute or a text changed in a frame, what is written is
-where it ended up, once, and a node added and removed again within the frame is left out. Script changes to form
-controls, which fire no event, are caught by wrapping the `value`, `checked`, `selectedIndex` and `selected`
-setters. Pointer moves are batched into columns, written once a batch spans a second: moving the pointer schedules
-no frames.
+**Changes.** Mutations, form state, scroll offsets, the viewport size and the URL are collected and written in a task
+of their own once the task that changed them ends, or once the frame renders when animation frame callbacks changed
+them, so every frame's changes are written. They are coalesced: however often a node, an attribute or a text changed
+in between, what is written is where it ended up, once, and a node added and removed again in between is left out.
+Script changes to form controls, which fire no event, are caught by wrapping the `value`, `checked`, `selectedIndex`
+and `selected` setters. Pointer moves are batched into columns and written once a batch spans a second, by a timer:
+a moving pointer costs no task per move.
 
 **Encoding.** Events are encoded into the binary TCR format as they are written, with ids implied by the order of
 nodes and strings shared through tables, and handed to the worker in batches, without a copy. The worker groups

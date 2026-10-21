@@ -22,7 +22,7 @@ TimeCat 录制网页里发生的一切，包括 DOM 变化、输入、滚动和�
 | 包 | 状态 |
 |---|---|
 | [`@timecat-js/protocol`](./packages/protocol) | v0 草案：二进制基本类型、字符串表、chunk 容器、事件负载 |
-| [`@timecat-js/recorder`](./packages/recorder) | M1：分片快照、按帧合并的变更、输入（脱敏）、指针、滚动、视口和导航；压缩和存储在 Worker 中完成 |
+| [`@timecat-js/recorder`](./packages/recorder) | M1：分片快照、合并后的增量变更、输入（脱敏）、指针、滚动、视口和导航；压缩和存储在 Worker 中完成 |
 | [`@timecat-js/player-core`](./packages/player-core) | M1：不带界面的回放，在 Worker 里建索引，通过关键帧 seek，在沙箱中回放 |
 | `@timecat-js/player` | 计划中（M2）：播放器界面 |
 

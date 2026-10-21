@@ -5,7 +5,7 @@ import type { NodeIds } from './ids.ts'
 
 /**
  * Records scroll offsets of the viewport and of elements. Nodes are marked when they scroll; their offsets are
- * read when the scroll event is written, at most once per frame.
+ * read when the scroll event is written, once per flush.
  */
 export class ScrollRecorder {
     readonly #ids: NodeIds

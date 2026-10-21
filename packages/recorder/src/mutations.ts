@@ -13,7 +13,7 @@ const NAMESPACED = '\0'
 /**
  * Mutation records reduced to what changed: which nodes were removed or inserted, which attributes and texts
  * changed. Records only say that something changed; the current state is read when the batch is written, so
- * many changes to one node within a frame cost one entry.
+ * many changes to one node between two flushes cost one entry.
  */
 export class MutationBuffer implements SnapshotGuard {
     generation = 0

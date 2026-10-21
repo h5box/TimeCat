@@ -58,9 +58,10 @@ const WINDOW_EVENTS = [
 const SNAPSHOT_BUFFER = 64 * 1024
 
 /**
- * Captures one document: a time-sliced snapshot first, then everything that changes, written as events once
- * per frame. The mutation observer is attached before the snapshot, which uses the records as its guard
- * (see `SnapshotGuard`); the changes the snapshot misses follow it as a Mutations event of the same time.
+ * Captures one document: a time-sliced snapshot first, then everything that changes, written as events once the
+ * task or the animation frame that changed it ends. The mutation observer is attached before the snapshot, which
+ * uses the records as its guard (see `SnapshotGuard`); the changes the snapshot misses follow it as a Mutations
+ * event of the same time.
  */
 export class Capture implements EventListenerObject {
     readonly #options: CaptureOptions
@@ -173,8 +174,8 @@ export class Capture implements EventListenerObject {
                     )
                     this.#awaitMoves()
                 }
-                // Moves need no flush until they span long enough to be written. A flush per move would keep
-                // the page rendering frames for as long as the pointer moves, and input waiting for them.
+                // Moves need no flush until they span long enough to be written: a timer covers them, so a moving
+                // pointer costs no task per move.
                 return
             case 'pointerdown':
             case 'pointerup':
@@ -390,21 +391,22 @@ export class Capture implements EventListenerObject {
     }
 }
 
-/** Flushes on the next animation frame, or after a timeout in background tabs, where frames stop. */
-export function nextFrame(flush: () => void): () => void {
-    let frame = 0
-    let timer = 0
-    const cancel = (): void => {
-        cancelAnimationFrame(frame)
-        clearTimeout(timer)
+/**
+ * Flushes in a task of its own once the current one ends, and so after the frame when animation frame callbacks
+ * made the changes: each frame's changes are written together, and every frame's are. An animation frame
+ * requested from those callbacks would come a frame late, with the next frame's changes. A message task also
+ * needs no rendering, and runs in background tabs, where frames stop and timers are throttled.
+ */
+export function afterTask(flush: () => void): () => void {
+    let cancelled = false
+    nextTask(() => {
+        if (!cancelled) {
+            flush()
+        }
+    })
+    return () => {
+        cancelled = true
     }
-    const run = (): void => {
-        cancel()
-        flush()
-    }
-    frame = requestAnimationFrame(run)
-    timer = setTimeout(run, 250)
-    return cancel
 }
 
 /** Yields with `scheduler.yield()`, whose continuation runs before other queued tasks, or a message task. */
@@ -412,12 +414,18 @@ export function yieldToPage(): Promise<void> {
     if (typeof scheduler !== 'undefined' && typeof scheduler.yield === 'function') {
         return scheduler.yield()
     }
-    return new Promise(resolve => {
-        const { port1, port2 } = new MessageChannel()
-        port1.addEventListener('message', () => resolve())
-        port1.start()
-        port2.postMessage(null)
+    return new Promise(nextTask)
+}
+
+function nextTask(run: () => void): void {
+    const { port1, port2 } = new MessageChannel()
+    port1.addEventListener('message', () => {
+        // Open ports with a listener are never collected.
+        port1.close()
+        run()
     })
+    port1.start()
+    port2.postMessage(null)
 }
 
 function noop(): void {}

@@ -27,7 +27,7 @@ video, without capturing actual video frames.
 | Package | Status |
 | --- | --- |
 | [`@timecat-js/protocol`](./packages/protocol) | v0 draft: binary primitives, string tables, chunk container, event payloads |
-| [`@timecat-js/recorder`](./packages/recorder) | M1: time-sliced snapshots, changes per frame, input (masked), pointer, scroll, viewport and navigation; compression and storage in a worker |
+| [`@timecat-js/recorder`](./packages/recorder) | M1: time-sliced snapshots, coalesced changes, input (masked), pointer, scroll, viewport and navigation; compression and storage in a worker |
 | [`@timecat-js/player-core`](./packages/player-core) | M1: replay without UI, indexed in a worker, seeking through keyframes, in a sandbox |
 | `@timecat-js/player` | planned (M2): the player UI |
 
