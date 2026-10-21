@@ -20,7 +20,7 @@
     },
     "overrides": [
         {
-            "files": ["apps/bench/**", "*.config.ts"],
+            "files": ["apps/bench/**", "apps/extension/*.ts", "apps/extension/test/**", "*.config.ts"],
             "env": {
                 "node": true
             }

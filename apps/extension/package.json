@@ -1,0 +1,29 @@
+{
+    "name": "@timecat-js/extension",
+    "version": "0.1.0",
+    "private": true,
+    "description": "TimeCat for Chrome: records a tab, across the pages it goes to, and replays it, with its console, requests and performance",
+    "license": "GPL-3.0-or-later",
+    "type": "module",
+    "scripts": {
+        "build": "node build.ts",
+        "icons": "node icons.ts",
+        "typecheck": "tsc -p . && tsc -p src"
+    },
+    "devDependencies": {
+        "@timecat-js/player": "workspace:^",
+        "@timecat-js/plugin-canvas": "workspace:^",
+        "@timecat-js/plugin-console": "workspace:^",
+        "@timecat-js/plugin-media": "workspace:^",
+        "@timecat-js/plugin-network": "workspace:^",
+        "@timecat-js/plugin-perf": "workspace:^",
+        "@timecat-js/protocol": "workspace:^",
+        "@timecat-js/recorder": "workspace:^",
+        "@types/chrome": "catalog:",
+        "@types/node": "catalog:",
+        "playwright": "catalog:",
+        "rolldown": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:"
+    }
+}

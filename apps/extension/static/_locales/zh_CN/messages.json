@@ -1,0 +1,40 @@
+{
+    "extName": { "message": "TimeCat" },
+    "extDescription": {
+        "message": "录下标签页里发生的一切并回放，跨页面跳转也能连着录，连同控制台、网络请求和性能数据。"
+    },
+    "actionTitle": { "message": "TimeCat：录制这个标签页" },
+    "commandToggle": { "message": "开始或停止录制标签页" },
+    "start": { "message": "开始录制" },
+    "stop": { "message": "停止录制" },
+    "recordingState": {
+        "message": "正在录制 · $DURATION$ · $PAGES$ 个页面",
+        "placeholders": { "duration": { "content": "$1" }, "pages": { "content": "$2" } }
+    },
+    "cannotRecord": { "message": "这个页面不能录制：只能录网页和本地文件。" },
+    "startFailed": { "message": "无法开始录制：$ERROR$", "placeholders": { "error": { "content": "$1" } } },
+    "recordWhat": { "message": "除了页面，还录制" },
+    "optConsole": { "message": "控制台输出和报错" },
+    "optNetwork": { "message": "网络请求" },
+    "optPerf": { "message": "性能（Web Vitals、长帧）" },
+    "optCanvas": { "message": "Canvas 画面（录成视频）" },
+    "optVideo": { "message": "视频画面（录成视频）" },
+    "optMask": { "message": "隐藏页面上的所有文字" },
+    "optionsHint": { "message": "改动从下一次录制开始生效。密码和表单输入始终会被隐藏。" },
+    "allRecordings": { "message": "所有录像" },
+    "recordings": { "message": "录像" },
+    "empty": { "message": "还没有录像。打开一个网页，再点工具栏上的 TimeCat 按钮开始录制。" },
+    "untitled": { "message": "无标题" },
+    "live": { "message": "录制中" },
+    "onePage": { "message": "1 个页面" },
+    "pages": { "message": "$COUNT$ 个页面", "placeholders": { "count": { "content": "$1" } } },
+    "exportHtml": { "message": "导出 HTML" },
+    "download": { "message": "下载 .tcr" },
+    "delete": { "message": "删除" },
+    "confirmDelete": { "message": "删除这段录像？删除后无法恢复。" },
+    "stopFirst": { "message": "请先停止录制。" },
+    "notFound": { "message": "找不到这段录像，可能已经被删除了。" },
+    "nothingRecorded": { "message": "什么也没有录到。" },
+    "stillRecording": { "message": "仍在录制：这里回放的是到目前为止录下的内容，刷新页面可以看到更多。" },
+    "cannotPlay": { "message": "录像无法播放：$ERROR$", "placeholders": { "error": { "content": "$1" } } }
+}

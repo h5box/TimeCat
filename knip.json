@@ -7,6 +7,10 @@
         "packages/*": {
             "project": ["src/**/*.ts", "test/**/*.ts"]
         },
+        "apps/extension": {
+            "entry": ["src/{background,bridge,main,popup,recordings,player}.ts"],
+            "project": ["*.ts", "src/**/*.ts", "test/**/*.ts"]
+        },
         "apps/bench": {
             "entry": ["src/page/*.ts"],
             "project": ["src/**/*.ts"]

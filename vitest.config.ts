@@ -25,9 +25,19 @@ export default defineConfig({
                 ssr: { resolve: { conditions: [source, 'module', 'node', 'development|production'] } },
                 test: {
                     name: 'node',
-                    include: ['packages/*/test/**/*.test.ts'],
-                    exclude: ['**/*.browser.test.ts'],
+                    include: ['packages/*/test/**/*.test.ts', 'apps/extension/test/**/*.test.ts'],
+                    exclude: ['**/*.browser.test.ts', '**/*.e2e.test.ts'],
                     environment: 'node'
+                }
+            },
+            {
+                // The built extension in Chromium, driven by Playwright from Node.
+                test: {
+                    name: 'extension',
+                    include: ['apps/extension/test/**/*.e2e.test.ts'],
+                    environment: 'node',
+                    testTimeout: 60_000,
+                    hookTimeout: 60_000
                 }
             },
             {

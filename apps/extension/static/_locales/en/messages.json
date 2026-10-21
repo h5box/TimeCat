@@ -1,0 +1,47 @@
+{
+    "extName": { "message": "TimeCat" },
+    "extDescription": {
+        "message": "Records what happens in a tab, across the pages it goes to, and replays it, with its console, requests and performance."
+    },
+    "actionTitle": { "message": "TimeCat: record this tab" },
+    "commandToggle": { "message": "Start or stop recording the tab" },
+    "start": { "message": "Start recording" },
+    "stop": { "message": "Stop recording" },
+    "recordingState": {
+        "message": "Recording · $DURATION$ · $PAGES$ page(s)",
+        "placeholders": { "duration": { "content": "$1" }, "pages": { "content": "$2" } }
+    },
+    "cannotRecord": { "message": "This page cannot be recorded: only pages of the web, and files, can." },
+    "startFailed": {
+        "message": "Recording could not start: $ERROR$",
+        "placeholders": { "error": { "content": "$1" } }
+    },
+    "recordWhat": { "message": "Record, besides the page" },
+    "optConsole": { "message": "Console messages and errors" },
+    "optNetwork": { "message": "Network requests" },
+    "optPerf": { "message": "Performance (Web Vitals, long frames)" },
+    "optCanvas": { "message": "What canvases show, as video" },
+    "optVideo": { "message": "What videos show, as video" },
+    "optMask": { "message": "Mask all text of pages" },
+    "optionsHint": { "message": "Changes apply to the next recording. Passwords and form input are always masked." },
+    "allRecordings": { "message": "All recordings" },
+    "recordings": { "message": "Recordings" },
+    "empty": {
+        "message": "No recordings yet. Open a page, then start recording from the TimeCat button in the toolbar."
+    },
+    "untitled": { "message": "Untitled" },
+    "live": { "message": "Recording" },
+    "onePage": { "message": "1 page" },
+    "pages": { "message": "$COUNT$ pages", "placeholders": { "count": { "content": "$1" } } },
+    "exportHtml": { "message": "Export HTML" },
+    "download": { "message": "Download .tcr" },
+    "delete": { "message": "Delete" },
+    "confirmDelete": { "message": "Delete this recording? This cannot be undone." },
+    "stopFirst": { "message": "Stop recording first." },
+    "notFound": { "message": "This recording is not here: it may have been deleted." },
+    "nothingRecorded": { "message": "Nothing was recorded." },
+    "stillRecording": {
+        "message": "Still recording: this plays what was recorded so far. Reload the page to see more."
+    },
+    "cannotPlay": { "message": "The recording cannot play: $ERROR$", "placeholders": { "error": { "content": "$1" } } }
+}

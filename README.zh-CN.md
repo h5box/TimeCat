@@ -31,6 +31,8 @@ TimeCat 录制网页里发生的一切，包括 DOM 变化、输入、滚动和�
 | [`@timecat-js/plugin-media`](./packages/plugin-media) | M3：`<audio>` 和 `<video>` 的播放状态，可选录下视频画面，以及麦克风旁白 |
 | [`@timecat-js/player`](./packages/player) | M2：`<timecat-player>` 组件，带播放控制、标出错误的时间轴和页面之外录到的事件面板；可把录像导出为单个 HTML 文件。M3：实时回放、音量和静音 |
 
+[`apps/extension`](./apps/extension) 是 TimeCat 的 Chrome 扩展（浏览器插件）：点工具栏按钮录制当前标签页，跨页面跳转也能接着录，录像存在浏览器里，可以回放、导出 HTML 和下载。还没有上架 Chrome 应用商店，构建和加载方法见它的 README。
+
 [`apps/bench`](./apps/bench) 在同一批夹具页面上（包括一个 Canvas 动画）测量 TimeCat 和 rrweb，并测量一小时录像里的 seek 耗时。
 
 ## 开发
@@ -42,6 +44,7 @@ corepack enable
 pnpm install
 pnpm check          # 格式、lint、类型、未使用代码、单元测试、构建、体积预算
 pnpm test:browser   # 在 Chromium、Firefox、WebKit 中运行测试（Playwright）
+pnpm test:extension # 构建 Chrome 扩展，在 Chromium 里跑端到端测试
 pnpm bench          # 录制器性能基准，与 rrweb 对比
 pnpm bench:seek     # 一小时录像里的 seek 耗时
 ```

@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>TimeCat</title>
+        <link rel="icon" href="icons/icon-32.png" />
+        <link rel="stylesheet" href="pages.css" />
+        <script src="player.js" defer></script>
+    </head>
+    <body class="player">
+        <header class="bar">
+            <a class="back" href="recordings.html" data-i18n-title="allRecordings">
+                <img src="icons/icon-32.png" alt="" width="24" height="24" />
+            </a>
+            <div class="about">
+                <h1 id="title"></h1>
+                <p><a id="url" target="_blank" rel="noreferrer"></a> <span id="meta" class="meta"></span></p>
+            </div>
+            <div class="actions">
+                <button id="export" type="button" data-i18n="exportHtml"></button>
+                <button id="download" type="button" data-i18n="download"></button>
+                <button id="delete" type="button" data-i18n="delete"></button>
+            </div>
+        </header>
+        <p id="notice" class="notice" hidden></p>
+        <timecat-player id="player" panel></timecat-player>
+    </body>
+</html>

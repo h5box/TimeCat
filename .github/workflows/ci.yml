@@ -52,3 +52,5 @@ jobs:
       - run: pnpm test:browser
         env:
           VITEST_BROWSERS: ${{ matrix.browser }}
+      - if: matrix.browser == 'chromium'
+        run: pnpm test:extension

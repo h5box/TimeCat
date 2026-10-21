@@ -36,6 +36,10 @@ video, without capturing actual video frames.
 | [`@timecat-js/plugin-media`](./packages/plugin-media) | M3: how `<audio>` and `<video>` play, optionally what videos show, and narration from the microphone |
 | [`@timecat-js/player`](./packages/player) | M2: `<timecat-player>`, with controls, a timeline marking errors and a panel of the events recorded beside the page; export of a recording as one HTML file. M3: live replay, volume and mute |
 
+[`apps/extension`](./apps/extension) is TimeCat for Chrome: it records a tab from the toolbar, across the pages it goes
+to, keeps the recordings in the browser, and plays, exports and downloads them. It is not on the Chrome Web Store yet;
+its README says how to build and load it.
+
 [`apps/bench`](./apps/bench) measures TimeCat and rrweb on the same fixture pages, an animated canvas among them,
 and seek time in a one-hour recording.
 
@@ -48,6 +52,7 @@ corepack enable
 pnpm install
 pnpm check          # format, lint, types, unused code, unit tests, build, size budget
 pnpm test:browser   # tests in Chromium, Firefox and WebKit (Playwright)
+pnpm test:extension # the Chrome extension, built and driven in Chromium
 pnpm bench          # recorder benchmarks, against rrweb
 pnpm bench:seek     # seek time in a one-hour recording
 ```

@@ -299,6 +299,7 @@ packages/
 apps/
   playground/      Vite 演示站 + 测试夹具页面
   bench/           性能基准（Playwright + CDP，对标 rrweb）
+  extension/       Chrome 扩展（MV3）：录制标签页，在扩展里存储、回放和导出
   server/          接入服务（M4）
   console/         管理控制台（M4）
 ```

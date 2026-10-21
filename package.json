@@ -11,6 +11,7 @@
         "format:check": "oxfmt --check",
         "test": "vitest run --project node",
         "test:browser": "vitest run --project browser",
+        "test:extension": "vitest run --project extension",
         "size": "size-limit",
         "knip": "knip",
         "bench": "pnpm --filter @timecat-js/bench bench",

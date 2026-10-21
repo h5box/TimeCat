@@ -176,6 +176,9 @@ catalogs:
     '@size-limit/preset-small-lib':
       specifier: 14.2.0
       version: 14.2.0
+    '@types/chrome':
+      specifier: 0.3.6
+      version: 0.3.6
     '@types/node':
       specifier: 24.19.2
       version: 24.19.2
@@ -295,6 +298,51 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
+
+  apps/extension:
+    devDependencies:
+      '@timecat-js/player':
+        specifier: workspace:^
+        version: link:../../packages/player
+      '@timecat-js/plugin-canvas':
+        specifier: workspace:^
+        version: link:../../packages/plugin-canvas
+      '@timecat-js/plugin-console':
+        specifier: workspace:^
+        version: link:../../packages/plugin-console
+      '@timecat-js/plugin-media':
+        specifier: workspace:^
+        version: link:../../packages/plugin-media
+      '@timecat-js/plugin-network':
+        specifier: workspace:^
+        version: link:../../packages/plugin-network
+      '@timecat-js/plugin-perf':
+        specifier: workspace:^
+        version: link:../../packages/plugin-perf
+      '@timecat-js/protocol':
+        specifier: workspace:^
+        version: link:../../packages/protocol
+      '@timecat-js/recorder':
+        specifier: workspace:^
+        version: link:../../packages/recorder
+      '@types/chrome':
+        specifier: 'catalog:'
+        version: 0.3.6
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.2
+      playwright:
+        specifier: 'catalog:'
+        version: 1.64.1
+      rolldown:
+        specifier: 'catalog:'
+        version: 1.2.14
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@types/node@24.19.2)(@vitest/browser-playwright@5.0.5)(@vitest/ui@5.0.5)(vite@8.3.4(@types/node@24.19.2)(jiti@2.7.0)(yaml@2.9.1))
 
   packages/player:
     dependencies:
@@ -1319,6 +1367,9 @@ packages:
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
+  '@types/chrome@0.3.6':
+    resolution: {integrity: sha512-NXCrCBefCHCKMVbkaxfBQqyP766Wg85S2FQhixCCxq7AtjJwoEaja2y5NSqCzpihIi9mPqhaF5RuybTnrdYD2Q==}
+
   '@types/css-font-loading-module@0.0.7':
     resolution: {integrity: sha512-nl09VhutdjINdWyXxHWN/w9zlNCfr60JUqJbd24YXUuCwgeL0TpFSdElCwb6cxfB6ybE19Gjj4g0jsgkXxKv1Q==}
 
@@ -1327,6 +1378,9 @@ packages:
 
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
+
+  '@types/har-format@1.2.16':
+    resolution: {integrity: sha512-fluxdy7ryD3MV6h8pTfTYpy/xQzCFC7m89nOH9y94cNqJ1mDIDPut7MnRHI3F6qRmh/cT2fUjG1MLdCNb4hE9A==}
 
   '@types/node@24.19.2':
     resolution: {integrity: sha512-93d49wCWJkCyN87MxLpNN6KXPCwFw7bVUg79mGUV1OS40JGWwVCr8n61DXCSqz7CV6/VfPkb7xec7uP2M+QHWQ==}
@@ -2732,11 +2786,17 @@ snapshots:
       '@types/deep-eql': 4.0.2
       assertion-error: 2.0.1
 
+  '@types/chrome@0.3.6':
+    dependencies:
+      '@types/har-format': 1.2.16
+
   '@types/css-font-loading-module@0.0.7': {}
 
   '@types/deep-eql@4.0.2': {}
 
   '@types/estree@1.0.9': {}
+
+  '@types/har-format@1.2.16': {}
 
   '@types/node@24.19.2':
     dependencies:
