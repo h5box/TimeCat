@@ -126,6 +126,10 @@ export class Capture implements EventListenerObject, Scope {
     #realms: RealmHooker | undefined
     /** Documents and shadow roots that are observed and listened to. */
     readonly #watched = new WeakSet<Node>()
+    /** The same, for those who watch them too, such as plugins. */
+    readonly #roots: WeakRef<InnerRoot>[] = []
+    #rootsAlive = 1
+    readonly #rootObservers: ((root: InnerRoot) => void)[] = []
     /** Closed shadow roots attached while recording, by host; open ones are found through their host. */
     readonly #closedRoots = new WeakMap<Element, ShadowRoot>()
     /** Frames written, with the document written as their content, or null for none. */
@@ -213,6 +217,23 @@ export class Capture implements EventListenerObject, Scope {
         } else {
             this.#listen(root, SHADOW_EVENTS)
         }
+        this.#addRoot(root)
+    }
+
+    /** Calls `observer` with each document and shadow root recorded, those so far and those to come. */
+    observeRoots(observer: (root: InnerRoot) => void): void {
+        for (const reference of this.#roots) {
+            const root = reference.deref()
+            if (root !== undefined) {
+                this.#notify(observer, root)
+            }
+        }
+        this.#rootObservers.push(observer)
+    }
+
+    /** Whether `element` is recorded as a placeholder, without its content. */
+    blocks(element: Element): boolean {
+        return this.#privacy.blocks(element)
     }
 
     contains(node: Node): boolean {
@@ -379,6 +400,29 @@ export class Capture implements EventListenerObject, Scope {
                 Math.round(event.clientY + offset[1])
             )
             this.#awaitMoves()
+        }
+    }
+
+    #addRoot(root: InnerRoot): void {
+        const roots = this.#roots
+        // Roots that are gone are dropped now and then, so their references take little room.
+        if (roots.length >= this.#rootsAlive * 2) {
+            const alive = roots.filter(reference => reference.deref() !== undefined)
+            roots.length = 0
+            roots.push(...alive)
+            this.#rootsAlive = Math.max(1, alive.length)
+        }
+        roots.push(new WeakRef(root))
+        for (const observer of this.#rootObservers) {
+            this.#notify(observer, root)
+        }
+    }
+
+    #notify(observer: (root: InnerRoot) => void, root: InnerRoot): void {
+        try {
+            observer(root)
+        } catch (error) {
+            this.#options.onError(error)
         }
     }
 

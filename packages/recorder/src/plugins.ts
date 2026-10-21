@@ -55,8 +55,21 @@ export interface PluginContext {
      * Its packets go into the recording as they come.
      */
     openMedia(format: MediaFormat, time?: number): MediaTrackWriter
+    /** Settles once the first snapshot of the page is written, which gives the nodes in the page their ids. */
+    readonly ready: Promise<void>
     /** The id the recording gives `node`, or 0 when it has none: when it is not recorded, or not yet. */
     nodeId(node: Node): number
+    /**
+     * Whether the recording leaves out what `element` holds, as the `block` option asks, recording a placeholder
+     * instead. Plugins that record what elements show leave it out too.
+     */
+    blocks(element: Element): boolean
+    /**
+     * Calls `callback` with each document and shadow root recorded, those so far and those to come: the page's
+     * document, the documents of its same-origin frames, and shadow roots. Events that do not leave a shadow tree
+     * can be listened to on its root.
+     */
+    observeRoots(callback: (root: Document | ShadowRoot) => void): void
     /** Reports an error that recording goes on after. */
     onError(error: unknown): void
 }
@@ -81,7 +94,10 @@ export interface PluginHost {
     write(track: number, type: number, time: number, body: Uint8Array): void
     mediaTrack(event: Omit<MediaTrackEvent, 'type'>, time: number): void
     media(track: number, packet: MediaPacket): void
+    readonly ready: Promise<void>
     nodeId(node: Node): number
+    blocks(element: Element): boolean
+    observeRoots(observer: (root: Document | ShadowRoot) => void): void
     onError(error: unknown): void
 }
 
@@ -166,7 +182,16 @@ function createContext(host: PluginHost, state: { stopped: boolean }, tracks: { 
                 }
             }
         },
+        ready: host.ready,
         nodeId: node => host.nodeId(node),
+        blocks: element => host.blocks(element),
+        observeRoots(callback) {
+            host.observeRoots(root => {
+                if (!state.stopped) {
+                    callback(root)
+                }
+            })
+        },
         onError: error => host.onError(error)
     }
     return context

@@ -50,6 +50,14 @@
         "limit": "2 kB"
     },
     {
+        "name": "@timecat-js/plugin-canvas",
+        "path": "packages/plugin-canvas/dist/index.js",
+        "import": "{ canvasPlugin }",
+        "ignore": ["@timecat-js/recorder"],
+        "gzip": true,
+        "limit": "3.5 kB"
+    },
+    {
         "name": "@timecat-js/player (the element with Lit, player-core aside)",
         "path": "packages/player/dist/index.js",
         "import": "{ TimecatPlayer }",

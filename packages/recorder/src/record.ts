@@ -135,7 +135,10 @@ export function record(options: RecordOptions = {}): Recorder {
         write: (track, type, time, body) => capture.write(track, type, time, body),
         mediaTrack: (event, time) => capture.mediaTrack(event, time),
         media: (track, packet) => capture.media(track, packet),
+        ready,
         nodeId: node => capture.nodeId(node),
+        blocks: element => capture.blocks(element),
+        observeRoots: observer => capture.observeRoots(observer),
         onError
     })
     const flush = (): void => {

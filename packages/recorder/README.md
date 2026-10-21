@@ -66,6 +66,7 @@ Plugins record what happens beside the page, each on a track of its own:
 | [`@timecat-js/plugin-console`](../plugin-console) | Console messages, uncaught errors and unhandled promise rejections. |
 | [`@timecat-js/plugin-network`](../plugin-network) | Requests made with `fetch`, `XMLHttpRequest` and `sendBeacon`, and the resources the page loads. |
 | [`@timecat-js/plugin-perf`](../plugin-perf) | LCP, CLS, INP, FCP, TTFB and long animation frames. |
+| [`@timecat-js/plugin-canvas`](../plugin-canvas) | What 2D and WebGL canvases show, as video. |
 
 ```ts
 import { consolePlugin } from '@timecat-js/plugin-console'
@@ -80,8 +81,16 @@ measurements that were not final, and can return a promise, until which it can w
 flush (recording waits for it up to 2 seconds). The context gives the window recorded, the recording's clock
 (`now()`, and `time()` for a `performance.now()` time such as a performance entry's, `microseconds()` for media
 packets), `write(event, time?)` for Console, Network, Perf, Custom and MediaState events, `openMedia(format)` for a
-media track, whose packets the writer it returns writes, `nodeId(node)` for the id a recorded node has in the
-recording, and `onError`. Errors a plugin throws as it starts or stops go to `onError`, and recording goes on.
+media track, whose packets the writer it returns writes, `ready`, which settles once the first snapshot gave the
+page's nodes their ids, `nodeId(node)` for the id a recorded node has in the recording, `blocks(element)` for whether
+the `block` option leaves out what an element holds, which a plugin that records what elements show leaves out too,
+`observeRoots(callback)` for the documents and shadow roots recorded, now and as they come, and `onError`. Errors a
+plugin throws as it starts or stops go to `onError`, and recording goes on.
+
+`recordStream(context, stream, options)` records a `MediaStream` with `MediaRecorder` into a container track: a
+file, written every `timeslice` milliseconds (1000 by default), in the first of `types` the browser records. It
+returns the track's writer and `stop()`, which settles once the last bytes are written; passing that writer as
+`writer` goes on with the same track, as a new file.
 
 ## Privacy
 

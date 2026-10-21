@@ -296,6 +296,58 @@ describe('record', () => {
         ])
     })
 
+    it('shows plugins the roots it records and the elements it blocks', async () => {
+        const host = document.createElement('div')
+        const shadow = host.attachShadow({ mode: 'open' })
+        shadow.innerHTML = '<p>inside</p>'
+        const frame = document.createElement('iframe')
+        const secret = document.createElement('canvas')
+        secret.className = 'secret'
+        document.body.append(host, frame, secret)
+        added.push(host, frame, secret)
+        const roots: (Document | ShadowRoot)[] = []
+        let context: PluginContext | undefined
+        const recorder = record({
+            worker: false,
+            block: '.secret',
+            plugins: [
+                {
+                    name: 'roots',
+                    start(given) {
+                        context = given
+                        given.observeRoots(root => void roots.push(root))
+                    }
+                }
+            ]
+        })
+        const probe = context!
+        let ready = false
+        const readied = (async () => {
+            await probe.ready
+            ready = true
+        })()
+        await recorder.ready
+        await readied
+        expect(ready).toBe(true)
+        expect(roots).toEqual([document, shadow, frame.contentDocument])
+        const later = document.createElement('div')
+        document.body.append(later)
+        added.push(later)
+        const laterShadow = later.attachShadow({ mode: 'open' })
+        await nextFrame()
+        expect(roots.at(-1)).toBe(laterShadow)
+        expect(probe.blocks(secret)).toBe(true)
+        expect(probe.blocks(host)).toBe(false)
+        expect(probe.nodeId(secret)).toBeGreaterThan(0)
+        await recorder.stop()
+        const count = roots.length
+        document.body.append(document.createElement('div'))
+        added.push(document.body.lastElementChild!)
+        document.body.lastElementChild!.attachShadow({ mode: 'open' })
+        await nextFrame()
+        expect(roots).toHaveLength(count)
+    })
+
     it('records the media tracks of plugins', async () => {
         const video = {
             kind: MediaKind.Video,
