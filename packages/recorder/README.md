@@ -24,7 +24,8 @@ const blob = await recorder.stop() // the whole recording, as a TCR file
 
 Recording starts when `record` is called, which throws for invalid options, such as a selector that does not
 parse. The concatenation of what `onData` receives is a complete recording, so it can feed an upload or a live
-stream; `export()` returns the recording so far without stopping.
+stream, which `@timecat-js/player-core` plays as it comes; `export()` returns the recording so far without
+stopping.
 
 ### Options
 
@@ -41,7 +42,8 @@ stream; `export()` returns the recording so far without stopping.
 | `segment` | `0` | Index of this page load within the session. |
 | `meta` | `{}` | JSON data stored in the recording's header. |
 | `plugins` | none | Plugins that record more than the page, such as console messages (see [Plugins](#plugins)). |
-| `onData` | none | Receives the header, then each chunk as it is finished. |
+| `onData` | none | Receives the header, then each chunk as it is finished, and every `latency` a sync chunk that tells live players how far they can play. |
+| `latency` | `5000` | Milliseconds it takes at most until what was recorded is stored, and with `onData`, until a live player can play it. Chunks end at least this often, so lower values make a larger recording; at least `100`. |
 | `onError` | logs | Receives errors recording goes on after. |
 
 ### Recorder
@@ -51,7 +53,7 @@ stream; `export()` returns the recording so far without stopping.
 | `sessionId` | The session's id. |
 | `ready` | Settles once the initial snapshot is written. |
 | `addEvent(name, data)` | Records an event of the application's own, such as a user signing in, with data that `JSON.stringify` takes; throws for data it does not. Players list these events with the plugins'. |
-| `flush()` | Writes pending changes and finishes the open chunks, so storage and `onData` have everything so far. Recording also flushes when the page is hidden. |
+| `flush()` | Writes pending changes and finishes the open chunks, so storage and `onData` have everything so far, and live players can play it. Recording also flushes when the page is hidden. |
 | `export()` | The recording so far, as a `Blob`. Recording goes on. |
 | `stop()` | Stops recording and returns the whole recording, as a `Blob`. |
 
@@ -74,10 +76,12 @@ const recorder = record({ plugins: [consolePlugin(), networkPlugin()] })
 
 A plugin is an object with a `name` and a `start(context)` method, called right after recording starts, which
 returns a function that stops it, called when recording stops; that function can still write events, such as
-measurements that were not final. The context gives the window recorded, the recording's clock (`now()`, and
-`time()` for a `performance.now()` time such as a performance entry's), `write(event, time?)` for Console,
-Network, Perf and Custom events, `nodeId(node)` for the id a recorded node has in the recording, and `onError`.
-Errors a plugin throws as it starts or stops go to `onError`, and recording goes on.
+measurements that were not final, and can return a promise, until which it can write, such as for an encoder to
+flush (recording waits for it up to 2 seconds). The context gives the window recorded, the recording's clock
+(`now()`, and `time()` for a `performance.now()` time such as a performance entry's, `microseconds()` for media
+packets), `write(event, time?)` for Console, Network, Perf, Custom and MediaState events, `openMedia(format)` for a
+media track, whose packets the writer it returns writes, `nodeId(node)` for the id a recorded node has in the
+recording, and `onError`. Errors a plugin throws as it starts or stops go to `onError`, and recording goes on.
 
 ## Privacy
 
@@ -127,7 +131,13 @@ replays serve in their place; `export()` and `stop()` wait for those reads.
 
 **Encoding.** Events are encoded into the binary TCR format as they are written, with ids implied by the order of
 nodes and strings shared through tables, and handed to the worker in batches, without a copy. The worker groups
-events into chunks per track, compresses them where that pays, and keeps them in memory or OPFS.
+events into chunks per track, compresses them where that pays, and keeps them in memory or OPFS. Media packets go
+the same way, into chunks of their own that start at key frames and are not compressed.
+
+**Live streams.** Chunks of different tracks end at different times, so a player that plays a recording as it comes
+needs to know how far it is complete. With `onData`, the page writes a sync point every `latency`, and when it is
+hidden or flushed: it writes what changed and the pointer moves collected so far, and the worker then ends every
+open chunk and writes a sync chunk, which promises that no event of the page earlier than its time comes later.
 
 ## Content security policy
 

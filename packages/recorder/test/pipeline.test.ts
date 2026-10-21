@@ -1,5 +1,15 @@
-import { ChunkFlag, EventType, gunzip, readEventFrames, readFile, Track } from '@timecat-js/protocol'
-import type { SegmentInfo } from '@timecat-js/protocol'
+import {
+    ChunkFlag,
+    ChunkKind,
+    EventType,
+    FIRST_DYNAMIC_TRACK,
+    gunzip,
+    readEventFrames,
+    readFile,
+    readMediaPackets,
+    Track
+} from '@timecat-js/protocol'
+import type { MediaPacket, SegmentInfo } from '@timecat-js/protocol'
 import * as fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import { BatchWriter } from '../src/batch.ts'
@@ -61,6 +71,11 @@ function concat(parts: readonly Uint8Array[]): Uint8Array {
         offset += part.length
     }
     return result
+}
+
+/** A packet with its data as its length and its first byte, which compare far faster. */
+function brief({ data, ...rest }: MediaPacket): Omit<MediaPacket, 'data'> & { size: number; fill: number | undefined } {
+    return { ...rest, size: data.length, fill: data[0] }
 }
 
 const TYPES: Record<number, number[]> = {
@@ -171,5 +186,91 @@ describe('Pipeline', () => {
         pipeline.part(Track.Dom, new Uint8Array([1, 2, 3]))
         await pipeline.close()
         expect(readFile(concat(parts)).chunks).toEqual([])
+    })
+
+    it('writes media packets in chunks that start at key packets', async () => {
+        const packet = fc.record({
+            delay: fc.oneof(fc.nat(40_000), fc.nat(3_000_000)),
+            duration: fc.nat(40_000),
+            key: fc.boolean(),
+            size: fc.oneof({ weight: 5, arbitrary: fc.nat(2000) }, { weight: 1, arbitrary: fc.nat(100_000) })
+        })
+        await fc.assert(
+            fc.asyncProperty(fc.array(packet, { minLength: 1, maxLength: 40 }), async items => {
+                let time = 1234
+                const packets = items.map(({ delay, duration, key, size }, i): MediaPacket => ({
+                    time: (time += delay),
+                    duration,
+                    key: key || i === 0,
+                    data: new Uint8Array(size).fill(i)
+                }))
+                const parts: Uint8Array[] = []
+                const pipeline = new Pipeline(
+                    info,
+                    bytes => void parts.push(bytes),
+                    error => {
+                        throw error
+                    }
+                )
+                const batch = new BatchWriter(bytes => pipeline.push(bytes))
+                for (const item of packets) {
+                    batch.media(FIRST_DYNAMIC_TRACK, item)
+                }
+                batch.commit()
+                await pipeline.close()
+                const { chunks } = readFile(concat(parts))
+                const read = chunks.map(chunk => readMediaPackets(chunk.payload, chunk.startTime))
+                expect(read.flat().map(brief)).toEqual(packets.map(brief))
+                for (const [i, chunk] of chunks.entries()) {
+                    const inChunk = read[i]!
+                    expect(chunk).toMatchObject({ kind: ChunkKind.Media, track: FIRST_DYNAMIC_TRACK })
+                    expect(chunk.flags).toBe(inChunk[0]!.key ? ChunkFlag.Keyframe : 0)
+                    expect(inChunk.slice(1).some(item => item.key)).toBe(false)
+                    expect(chunk.startTime).toBe(Math.floor(inChunk[0]!.time / 1000))
+                    const end = Math.max(...inChunk.map(item => item.time + item.duration))
+                    expect(chunk.startTime + chunk.duration).toBe(Math.ceil(end / 1000))
+                    const last = inChunk[inChunk.length - 1]!
+                    expect(inChunk.length === 1 || last.time / 1000 - chunk.startTime < MAX_SPAN).toBe(true)
+                }
+            }),
+            { numRuns: 40 }
+        )
+    })
+
+    it('writes sync chunks after the chunks they complete, and no page event before them', async () => {
+        const parts: Uint8Array[] = []
+        const pipeline = new Pipeline(
+            info,
+            bytes => void parts.push(bytes),
+            error => {
+                throw error
+            }
+        )
+        const batch = new BatchWriter(bytes => pipeline.push(bytes))
+        batch.event(Track.Dom, EventType.Mutations, 10, new Uint8Array([1]))
+        batch.event(Track.Console, EventType.Console, 5, new Uint8Array([2]))
+        batch.sync(100)
+        batch.event(Track.Pointer, EventType.PointerButton, 50, new Uint8Array([3]))
+        batch.event(Track.Console, EventType.Console, 20, new Uint8Array([4]))
+        batch.sync(90)
+        batch.commit()
+        await pipeline.close()
+        const { chunks } = readFile(concat(parts))
+        const summary = chunks.map(({ kind, track, startTime, payload }) => ({
+            kind,
+            track,
+            times: kind === ChunkKind.Events ? readEventFrames(payload, startTime).map(frame => frame.time) : startTime
+        }))
+        expect(summary).toEqual([
+            { kind: ChunkKind.Events, track: Track.Dom, times: [10] },
+            { kind: ChunkKind.Events, track: Track.Console, times: [5] },
+            { kind: ChunkKind.Sync, track: 0, times: 100 },
+            // The console is no page track; the pointer event comes after the sync point, so it is moved to it.
+            { kind: ChunkKind.Events, track: Track.Console, times: [20] },
+            { kind: ChunkKind.Events, track: Track.Pointer, times: [100] },
+            // Sync points do not go back.
+            { kind: ChunkKind.Sync, track: 0, times: 100 }
+        ])
+        expect(chunks.map(chunk => chunk.sequence)).toEqual([0, 1, 2, 3, 4, 5])
     })
 })

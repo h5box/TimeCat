@@ -6,6 +6,8 @@ export interface ClientOptions {
     worker: boolean | string | URL
     info: SegmentInfo
     storage: StorageKind
+    /** How long a chunk spans at most, in milliseconds. */
+    latency: number
     onData: ((bytes: Uint8Array) => void) | undefined
     onError: (error: unknown) => void
 }
@@ -32,7 +34,13 @@ export class PipelineClient {
     constructor(options: ClientOptions) {
         this.#options = options
         this.#held = [
-            { type: 'init', info: options.info, storage: options.storage, stream: options.onData !== undefined }
+            {
+                type: 'init',
+                info: options.info,
+                storage: options.storage,
+                stream: options.onData !== undefined,
+                latency: options.latency
+            }
         ]
         const worker = options.worker
         if (worker === false) {

@@ -7,36 +7,42 @@ import {
     Track,
     writeChunk,
     writeEventFrame,
-    writeFileHeader
+    writeFileHeader,
+    writeMediaPacket
 } from '@timecat-js/protocol'
-import type { SegmentInfo } from '@timecat-js/protocol'
+import type { MediaPacket, SegmentInfo } from '@timecat-js/protocol'
 import { readBatch } from '../batch.ts'
 import type { BatchTarget } from '../batch.ts'
 
 /** A chunk ends before its payload grows past this, so it usually stays within 64 KiB compressed (RFC 0002, 4.2). */
 const MAX_PAYLOAD = 128 * 1024
-/** A chunk ends before it spans more than this, in recording time and in wall-clock time. */
-const MAX_SPAN = 5000
+/** How long a chunk spans at most by default, in recording time and in wall-clock time. */
+export const LATENCY = 5000
 /** Below this, gzip's own overhead outweighs what it saves. */
 const MIN_COMPRESSED = 128
 /** How often open chunks are checked for their wall-clock age. */
 const AGE_CHECK_INTERVAL = 1000
 
 interface OpenChunk {
+    readonly kind: typeof ChunkKind.Events | typeof ChunkKind.Media
     readonly track: number
-    /** Events so far; empty while the chunk is closed. */
+    /** Events or packets so far; empty while the chunk is closed. */
     readonly payload: ByteWriter
+    /** Milliseconds. */
     startTime: number
+    /** The time of the last event, in milliseconds; or of the last packet, in microseconds. */
     lastTime: number
+    /** Where the chunk ends, in milliseconds. */
+    endTime: number
     keyframe: boolean
     /** `performance.now()` when the first event arrived. */
     openedAt: number
 }
 
 /**
- * Turns events into a TCR segment: one open chunk per track, ended by size, by time span or on request, then
- * compressed and handed to `write` in order. Writes run one at a time, so the output order is the order chunks
- * end in, which also gives them their sequence numbers.
+ * Turns events and media packets into a TCR segment: one open chunk per track, ended by size, by time span or on
+ * request, then compressed and handed to `write` in order. Writes run one at a time, so the output order is the
+ * order chunks end in, which also gives them their sequence numbers.
  */
 export class Pipeline implements BatchTarget {
     readonly #write: (bytes: Uint8Array<ArrayBuffer>) => void | Promise<void>
@@ -46,19 +52,25 @@ export class Pipeline implements BatchTarget {
     readonly #parts = new Map<number, Uint8Array[]>()
     #queue: Promise<void> = Promise.resolve()
     #sequence = 0
+    readonly #span: number
+    /** The last sync point: page events are not written earlier than this. */
+    #syncTime = 0
     readonly #timer: ReturnType<typeof setInterval>
 
+    /** `latency` is how long a chunk spans at most, in milliseconds. */
     constructor(
         info: SegmentInfo,
         write: (bytes: Uint8Array<ArrayBuffer>) => void | Promise<void>,
-        onError: (error: unknown) => void
+        onError: (error: unknown) => void,
+        latency: number = LATENCY
     ) {
         this.#write = write
         this.#onError = onError
+        this.#span = latency
         const header = new ByteWriter(256)
         writeFileHeader(header, info)
         this.#enqueue(() => write(header.finish()))
-        this.#timer = setInterval(this.#endOldChunks, AGE_CHECK_INTERVAL)
+        this.#timer = setInterval(this.#endOldChunks, Math.min(AGE_CHECK_INTERVAL, latency))
     }
 
     /** Takes a batch written by `BatchWriter`. */
@@ -73,27 +85,62 @@ export class Pipeline implements BatchTarget {
             parts.push(body)
             body = concat(parts)
         }
-        let chunk = this.#chunks.get(track)
-        if (chunk === undefined) {
-            chunk = { track, payload: new ByteWriter(4096), startTime: 0, lastTime: 0, keyframe: false, openedAt: 0 }
-            this.#chunks.set(track, chunk)
-        } else if (
+        if (track < Track.Console) {
+            // What a sync point promised for the page tracks.
+            time = Math.max(time, this.#syncTime)
+        }
+        const chunk = this.#open(ChunkKind.Events, track)
+        if (
             chunk.payload.length > 0 &&
             // A snapshot starts a chunk, which makes that chunk a keyframe of the DOM track.
             (type === EventType.Snapshot ||
                 chunk.payload.length + body.length > MAX_PAYLOAD ||
-                time - chunk.startTime >= MAX_SPAN)
+                time - chunk.startTime >= this.#span)
         ) {
             this.#end(chunk)
         }
         if (chunk.payload.length === 0) {
-            chunk.startTime = time
-            chunk.lastTime = time
-            chunk.keyframe = track !== Track.Dom || type === EventType.Snapshot
-            chunk.openedAt = performance.now()
+            this.#start(chunk, time, track !== Track.Dom || type === EventType.Snapshot)
         }
         writeEventFrame(chunk.payload, type, Math.max(0, time - chunk.lastTime), body)
         chunk.lastTime = Math.max(chunk.lastTime, time)
+        chunk.endTime = chunk.lastTime
+    }
+
+    /** Takes a media packet. A key packet starts a chunk, from which decoding can start. */
+    media(track: number, packet: MediaPacket): void {
+        const chunk = this.#open(ChunkKind.Media, track)
+        if (
+            chunk.payload.length > 0 &&
+            (packet.key ||
+                chunk.payload.length + packet.data.length > MAX_PAYLOAD ||
+                packet.time / 1000 - chunk.startTime >= this.#span)
+        ) {
+            this.#end(chunk)
+        }
+        if (chunk.payload.length === 0) {
+            this.#start(chunk, Math.floor(packet.time / 1000), packet.key)
+            chunk.lastTime = chunk.startTime * 1000
+        }
+        writeMediaPacket(chunk.payload, packet, chunk.lastTime)
+        chunk.lastTime = packet.time
+        chunk.endTime = Math.max(chunk.endTime, Math.ceil((packet.time + packet.duration) / 1000))
+    }
+
+    /** Ends all open chunks and writes a sync chunk, for readers of a live stream (RFC 0002, 4.4). */
+    sync(time: number): void {
+        this.#syncTime = Math.max(this.#syncTime, time)
+        for (const chunk of this.#chunks.values()) {
+            this.#end(chunk)
+        }
+        const startTime = this.#syncTime
+        const sequence = this.#sequence++
+        this.#enqueue(() => {
+            const bytes = new ByteWriter(16)
+            const payload = new Uint8Array(0)
+            writeChunk(bytes, { kind: ChunkKind.Sync, track: 0, flags: 0, sequence, startTime, duration: 0, payload })
+            return this.#write(bytes.finish())
+        })
     }
 
     part(track: number, body: Uint8Array): void {
@@ -120,18 +167,45 @@ export class Pipeline implements BatchTarget {
         return this.flush()
     }
 
+    #open(kind: OpenChunk['kind'], track: number): OpenChunk {
+        let chunk = this.#chunks.get(track)
+        if (chunk === undefined) {
+            chunk = {
+                kind,
+                track,
+                payload: new ByteWriter(4096),
+                startTime: 0,
+                lastTime: 0,
+                endTime: 0,
+                keyframe: false,
+                openedAt: 0
+            }
+            this.#chunks.set(track, chunk)
+        }
+        return chunk
+    }
+
+    #start(chunk: OpenChunk, time: number, keyframe: boolean): void {
+        chunk.startTime = time
+        chunk.lastTime = time
+        chunk.endTime = time
+        chunk.keyframe = keyframe
+        chunk.openedAt = performance.now()
+    }
+
     #end(chunk: OpenChunk): void {
         if (chunk.payload.length === 0) {
             return
         }
         const payload = chunk.payload.finish()
         chunk.payload.reset()
-        const { track, startTime, lastTime, keyframe } = chunk
+        const { kind, track, startTime, endTime, keyframe } = chunk
         const sequence = this.#sequence++
         this.#enqueue(async () => {
             let data = payload
             let flags = keyframe ? ChunkFlag.Keyframe : 0
-            if (payload.length >= MIN_COMPRESSED) {
+            // Encoded media hardly compresses.
+            if (kind === ChunkKind.Events && payload.length >= MIN_COMPRESSED) {
                 const compressed = await gzip(payload)
                 if (compressed.length < payload.length) {
                     data = compressed
@@ -139,15 +213,7 @@ export class Pipeline implements BatchTarget {
                 }
             }
             const bytes = new ByteWriter(data.length + 32)
-            writeChunk(bytes, {
-                kind: ChunkKind.Events,
-                track,
-                flags,
-                sequence,
-                startTime,
-                duration: lastTime - startTime,
-                payload: data
-            })
+            writeChunk(bytes, { kind, track, flags, sequence, startTime, duration: endTime - startTime, payload: data })
             await this.#write(bytes.finish())
         })
     }
@@ -159,7 +225,7 @@ export class Pipeline implements BatchTarget {
     readonly #endOldChunks = (): void => {
         const now = performance.now()
         for (const chunk of this.#chunks.values()) {
-            if (chunk.payload.length > 0 && now - chunk.openedAt >= MAX_SPAN) {
+            if (chunk.payload.length > 0 && now - chunk.openedAt >= this.#span) {
                 this.#end(chunk)
             }
         }

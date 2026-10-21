@@ -1,4 +1,13 @@
-import { EventType, NodeKind, Track } from '@timecat-js/protocol'
+import {
+    ChunkKind,
+    EventType,
+    FIRST_DYNAMIC_TRACK,
+    MediaKind,
+    NodeKind,
+    readMediaPackets,
+    SegmentReader,
+    Track
+} from '@timecat-js/protocol'
 import type { SerializedNode } from '@timecat-js/protocol'
 import { afterEach, describe, expect, it } from 'vitest'
 import { record } from '../src/index.ts'
@@ -80,6 +89,28 @@ describe('record', () => {
         const blob = await recorder.stop()
         const streamed = new Blob(parts.map(part => new Uint8Array(part)))
         expect(new Uint8Array(await streamed.arrayBuffer())).toEqual(new Uint8Array(await blob.arrayBuffer()))
+    })
+
+    it('streams sync points, at least as often as the latency asked', async () => {
+        const reader = new SegmentReader()
+        const syncs: number[] = []
+        const recorder = record({
+            worker: false,
+            latency: 100,
+            onData(bytes) {
+                for (const { chunk } of reader.push(bytes)) {
+                    if (chunk?.kind === ChunkKind.Sync) {
+                        syncs.push(chunk.startTime)
+                    }
+                }
+            }
+        })
+        await recorder.ready
+        await new Promise(resolve => setTimeout(resolve, 450))
+        await recorder.stop()
+        expect(syncs.length).toBeGreaterThanOrEqual(3)
+        expect(syncs).toEqual(syncs.toSorted((a, b) => a - b))
+        expect(syncs[syncs.length - 1]).toBeGreaterThanOrEqual(300)
     })
 
     it('writes the changes of every animation frame', async () => {
@@ -165,6 +196,8 @@ describe('record', () => {
         expect(error).toMatchObject({ name: 'SyntaxError' })
         expect(() => record({ segment: -1 })).toThrow(RangeError)
         expect(() => record({ meta: { big: 1n } })).toThrow(TypeError)
+        expect(() => record({ latency: 50 })).toThrow(RangeError)
+        expect(() => record({ latency: Number.NaN })).toThrow(RangeError)
     })
 
     it('records the events of the application', async () => {
@@ -260,6 +293,62 @@ describe('record', () => {
         expect(errors.map(error => (error instanceof Error ? error.message : error))).toEqual([
             'plugin broken did not start',
             'plugin stuck did not stop'
+        ])
+    })
+
+    it('records the media tracks of plugins', async () => {
+        const video = {
+            kind: MediaKind.Video,
+            targetId: 0,
+            codec: 'vp8',
+            description: new Uint8Array(),
+            container: '',
+            width: 320,
+            height: 240,
+            sampleRate: 0,
+            channels: 0
+        }
+        const recorder = record({
+            worker: false,
+            plugins: [
+                {
+                    name: 'media',
+                    start(context) {
+                        const first = context.openMedia(video)
+                        const second = context.openMedia({ ...video, kind: MediaKind.Audio, codec: 'opus' })
+                        const now = context.microseconds(performance.now())
+                        first.write({ time: now, duration: 1000, key: true, data: Uint8Array.of(1) })
+                        first.write({ time: now + 1000, duration: 1000, key: false, data: Uint8Array.of(2) })
+                        first.format({ ...video, width: 640 })
+                        first.write({ time: now + 2000, duration: 1000, key: true, data: Uint8Array.of(3) })
+                        return async () => {
+                            // Stopping can take a while, such as for an encoder to flush.
+                            await new Promise(resolve => setTimeout(resolve, 20))
+                            second.write({ time: now + 3000, duration: 0, key: true, data: Uint8Array.of(4) })
+                        }
+                    }
+                }
+            ]
+        })
+        await recorder.ready
+        const { events, chunks } = await decodeRecording(await recorder.stop())
+        const declared = eventsOf(events, EventType.MediaTrack)
+        expect(declared.map(({ track, kind, width }) => ({ track, kind, width }))).toEqual([
+            { track: FIRST_DYNAMIC_TRACK, kind: MediaKind.Video, width: 320 },
+            { track: FIRST_DYNAMIC_TRACK + 1, kind: MediaKind.Audio, width: 320 },
+            { track: FIRST_DYNAMIC_TRACK, kind: MediaKind.Video, width: 640 }
+        ])
+        expect(events.find(({ event }) => event.type === EventType.MediaTrack)?.track).toBe(Track.Media)
+        const packets = chunks
+            .filter(chunk => chunk.kind === ChunkKind.Media)
+            .map(chunk => ({
+                track: chunk.track,
+                data: readMediaPackets(chunk.payload, chunk.startTime).map(packet => Array.from(packet.data))
+            }))
+        expect(packets).toEqual([
+            { track: FIRST_DYNAMIC_TRACK, data: [[1], [2]] },
+            { track: FIRST_DYNAMIC_TRACK, data: [[3]] },
+            { track: FIRST_DYNAMIC_TRACK + 1, data: [[4]] }
         ])
     })
 })

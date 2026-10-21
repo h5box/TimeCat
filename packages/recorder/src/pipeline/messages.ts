@@ -5,7 +5,8 @@ export type StorageKind = 'memory' | 'opfs'
 
 /** Messages from the page to the pipeline. */
 export type Request =
-    | { type: 'init'; info: SegmentInfo; storage: StorageKind; stream: boolean }
+    /** `latency` is how long a chunk spans at most, in milliseconds. */
+    | { type: 'init'; info: SegmentInfo; storage: StorageKind; stream: boolean; latency: number }
     /** Records written by `BatchWriter`. */
     | { type: 'batch'; batch: Uint8Array<ArrayBuffer> }
     /** Ends the open chunks, so storage has everything so far. */

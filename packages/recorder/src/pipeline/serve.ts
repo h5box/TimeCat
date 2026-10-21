@@ -21,7 +21,7 @@ export function serve(post: (response: Response) => void): (request: Request) =>
     return request => {
         switch (request.type) {
             case 'init': {
-                const { info, stream } = request
+                const { info, stream, latency } = request
                 const opened = openStorage(request.storage, info, reportError)
                 storage = opened
                 pipeline = new Pipeline(
@@ -32,7 +32,8 @@ export function serve(post: (response: Response) => void): (request: Request) =>
                             post({ type: 'data', bytes })
                         }
                     },
-                    reportError
+                    reportError,
+                    latency
                 )
                 post({ type: 'ready' })
                 break

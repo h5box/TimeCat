@@ -27,6 +27,11 @@ export class PointerRecorder {
         return this.#times.length > 0
     }
 
+    /** The time of the moves waiting to be written: they are written as one event at this time. */
+    get start(): number {
+        return this.#start
+    }
+
     move(time: number, pointer: PointerType, x: number, y: number): void {
         const count = this.#times.length
         if (count > 0) {

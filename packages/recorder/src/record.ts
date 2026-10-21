@@ -3,6 +3,7 @@ import { BatchWriter } from './batch.ts'
 import { afterTask, Capture, yieldToPage } from './capture.ts'
 import { PipelineClient } from './client.ts'
 import type { StorageKind } from './pipeline/messages.ts'
+import { LATENCY } from './pipeline/pipeline.ts'
 import { startPlugins } from './plugins.ts'
 import type { RecorderPlugin } from './plugins.ts'
 import type { PrivacyOptions } from './privacy.ts'
@@ -37,9 +38,16 @@ export interface RecordOptions extends PrivacyOptions {
     plugins?: readonly RecorderPlugin[] | undefined
     /**
      * Receives the recording while it is written: the header, then each chunk as it is finished. Their
-     * concatenation is a complete recording, so this can feed an upload or a live stream.
+     * concatenation is a complete recording, so this can feed an upload or a live stream, which a player can
+     * play as it comes.
      */
     onData?: ((bytes: Uint8Array) => void) | undefined
+    /**
+     * How long, in milliseconds, it takes at most until what was recorded is stored, and with `onData`, until a
+     * live player can play it. Chunks end at least this often, and so lower values make for a larger recording.
+     * 5000 by default, at least 100.
+     */
+    latency?: number | undefined
     /** Receives errors that recording survives. Logged to the console by default. */
     onError?: ((error: unknown) => void) | undefined
 }
@@ -65,6 +73,7 @@ export interface Recorder {
 const SLICE_MS = 8
 const CHECK_EVERY = 64
 const ASSET_BUDGET = 8 * 1024 * 1024
+const MIN_LATENCY = 100
 
 /**
  * Starts recording the current page. Throws when an option is invalid, such as a selector that does not parse.
@@ -78,6 +87,11 @@ export function record(options: RecordOptions = {}): Recorder {
     if (!(assetBudget >= 0)) {
         throw new RangeError(`assetBudget must be a non-negative number, got ${assetBudget}`)
     }
+    const latency = options.latency ?? LATENCY
+    if (!(latency >= MIN_LATENCY && latency < Infinity)) {
+        throw new RangeError(`latency must be a number of milliseconds from ${MIN_LATENCY}, got ${latency}`)
+    }
+    const streaming = options.onData !== undefined
     // A copy that is plain JSON, as the header stores it; also fails early on values JSON cannot hold.
     const meta: Record<string, unknown> = JSON.parse(JSON.stringify(options.meta ?? {}))
     const onError = options.onError ?? logError
@@ -97,7 +111,12 @@ export function record(options: RecordOptions = {}): Recorder {
         assetBudget,
         yieldToPage,
         scheduleFlush: afterTask,
-        onHidden: () => client.flush(),
+        onHidden: () => {
+            if (streaming) {
+                capture.sync()
+            }
+            client.flush()
+        },
         onError
     })
     // Created after the capture, which validates the options, so invalid options start no worker.
@@ -105,6 +124,7 @@ export function record(options: RecordOptions = {}): Recorder {
         worker: options.worker ?? true,
         info: { sessionId, segment, startedAt, meta },
         storage: options.storage ?? 'memory',
+        latency,
         onData: options.onData,
         onError
     })
@@ -113,9 +133,20 @@ export function record(options: RecordOptions = {}): Recorder {
         window,
         origin,
         write: (track, type, time, body) => capture.write(track, type, time, body),
+        mediaTrack: (event, time) => capture.mediaTrack(event, time),
+        media: (track, packet) => capture.media(track, packet),
         nodeId: node => capture.nodeId(node),
         onError
     })
+    const flush = (): void => {
+        capture.flush(true)
+        if (streaming) {
+            capture.sync()
+        }
+        client.flush()
+    }
+    // A live player plays up to the last sync point, so they come even when the page is quiet.
+    const heartbeat = streaming ? setInterval(flush, latency) : undefined
     let stopped: Promise<Blob> | undefined
     return {
         sessionId,
@@ -131,10 +162,7 @@ export function record(options: RecordOptions = {}): Recorder {
                 capture.write(Track.Custom, EventType.Custom, time, encodeCustom({ name, data: json }))
             }
         },
-        flush() {
-            capture.flush(true)
-            client.flush()
-        },
+        flush,
         async export() {
             await ready
             capture.flush(true)
@@ -142,8 +170,10 @@ export function record(options: RecordOptions = {}): Recorder {
             return client.export()
         },
         stop() {
-            stopPlugins()
+            const pluginsStopped = stopPlugins()
+            clearInterval(heartbeat)
             stopped ??= ready.then(async () => {
+                await pluginsStopped
                 capture.flush(true)
                 await capture.settled()
                 capture.stop()

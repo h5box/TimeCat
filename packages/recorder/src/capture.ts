@@ -1,5 +1,6 @@
 import {
     ByteWriter,
+    encodeMediaTrack,
     encodeNavigation,
     encodeViewport,
     EventType,
@@ -7,6 +8,7 @@ import {
     PointerAction,
     Track
 } from '@timecat-js/protocol'
+import type { MediaPacket, MediaTrackEvent } from '@timecat-js/protocol'
 import { AssetRecorder } from './assets.ts'
 import type { EventSink } from './batch.ts'
 import {
@@ -251,6 +253,33 @@ export class Capture implements EventListenerObject, Scope {
             this.#sink.event(track, type, time, body)
             this.#requestFlush()
         }
+    }
+
+    /** Declares a media track, or its new format, with the next changes. */
+    mediaTrack(event: Omit<MediaTrackEvent, 'type'>, time: number): void {
+        this.write(Track.Media, EventType.MediaTrack, time, encodeMediaTrack(event))
+    }
+
+    /** Writes a packet of a media track, declared before, with the next changes. */
+    media(track: number, packet: MediaPacket): void {
+        if (!this.#stopped) {
+            this.#sink.media(track, packet)
+            this.#requestFlush()
+        }
+    }
+
+    /**
+     * Writes a sync point for readers of a live stream (RFC 0002, 4.4), and with it what was written so far: no
+     * event on a page track comes with an earlier time from here on. Pointer moves waiting to be written hold it
+     * back to their time.
+     */
+    sync(): void {
+        if (this.#stopped) {
+            return
+        }
+        const now = this.#options.now()
+        this.#sink.sync(this.#pointer.pending ? Math.min(now, this.#pointer.start) : now)
+        this.#sink.commit()
     }
 
     /** The id of a recorded node, or 0. */
