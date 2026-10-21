@@ -83,6 +83,9 @@ export class Materializer {
         this.#url = snapshot.url
         const root = snapshot.root
         this.#register(document, root.id)
+        // The viewport keeps the scroll position of what it showed before; a snapshot starts at the top, unless
+        // scroll positions after it say otherwise. Elements are new, so they start there anyway.
+        this.#scrolls.set(document, { x: 0, y: 0, tries: 0 })
         // Set before any node exists, so every URL resolves against the recorded page's from the start.
         this.#setBaseUrl(firstBaseHref(root))
         for (const child of root.children) {
