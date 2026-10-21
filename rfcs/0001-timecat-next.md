@@ -284,25 +284,26 @@ M1 起初在下一个动画帧（rAF）里处理，基准测出两个问题，�
 
 ```
 packages/
-  protocol/      事件模型 + TCR 编解码（零依赖，录制、回放、服务端共用）
-  recorder/      录制核心：主线程入口 + Worker 入口
-  plugins/
-    canvas/      Canvas / WebGL 视频轨（WebCodecs）
-    media/       麦克风旁白、<video> 状态与画面
-    console/     控制台与未捕获错误
-    network/     fetch / XHR 元数据
-    perf/        Web Vitals、长任务
-  player-core/   无头回放引擎：时间轴、seek 索引、DOM 物化、沙箱
-  player/        <timecat-player>（Lit）
-  insight/       语义转写 + AI 分析（在服务端运行）
-  mcp/           MCP Server
-  cli/           inspect / export / convert
+  protocol/        事件模型 + TCR 编解码（零依赖，录制、回放、服务端共用）
+  recorder/        录制核心：主线程入口 + Worker 入口，插件接口
+  plugin-console/  控制台输出、未捕获的错误和未处理的 Promise 拒绝
+  plugin-network/  fetch / XHR / sendBeacon 请求和资源加载的元数据
+  plugin-perf/     Web Vitals、布局偏移、长动画帧
+  plugin-canvas/   Canvas / WebGL 视频轨（WebCodecs，M3）
+  plugin-media/    麦克风旁白、<video> 状态与画面（M3）
+  player-core/     无头回放引擎：时间轴、seek 索引、DOM 物化、沙箱
+  player/          <timecat-player>（Lit），导出为单个 HTML 文件
+  insight/         语义转写 + AI 分析（在服务端运行，M4）
+  mcp/             MCP Server（M4）
+  cli/             inspect / export / convert
 apps/
-  playground/    Vite 演示站 + 测试夹具页面
-  bench/         性能基准（Playwright + CDP，对标 rrweb）
-  server/        接入服务（M4）
-  console/       管理控制台（M4）
+  playground/      Vite 演示站 + 测试夹具页面
+  bench/           性能基准（Playwright + CDP，对标 rrweb）
+  server/          接入服务（M4）
+  console/         管理控制台（M4）
 ```
+
+目录名和包名一致：`packages/plugin-console` 就是 `@timecat-js/plugin-console`。插件没有放进 `plugins/` 子目录，这样每个包的路径都能从包名直接推出来。还没开始的包和应用，用到时再建。
 
 ## 7. 质量保障
 
@@ -314,19 +315,23 @@ apps/
 
 ## 8. 性能目标（首版，全部由基准套件验证）
 
-| 指标 | 目标 | M1 实测（2026-10-21） |
+| 指标 | 目标 | 实测（2026-10-21，M2） |
 |---|---|---|
-| 录制端主线程核心包 | ≤ 15 KB gzip，Worker 部分按需加载 | 14.1 KB，按需加载的 Worker 脚本和主线程兜底也算在内 |
-| 录制引起的长任务 | 在 5 万节点的页面上，没有一个超过 50ms | 没有（rrweb 是一个 584ms 的长任务） |
+| 录制端主线程核心包 | ≤ 15 KB gzip，Worker 部分按需加载 | 随页面加载的部分 14.1 KB；算上按需加载的 Worker 脚本和主线程兜底是 19.0 KB。M1 全部算上是 14.1 KB，M2 多了 Shadow DOM、CSSOM、字体等的录制和插件接口 |
+| 录制引起的长任务 | 在 5 万节点的页面上，没有一个超过 50ms | 没有（rrweb 是一个 431ms 的长任务） |
 | 快照体积 | 比 1.x 格式小 2.5 倍以上 | 4.4 倍：`snapshot-large` 的页面，1.x 风格的对象树 gzip 后 285.8 KB，TimeCat 64.9 KB |
 | 指针轨迹体积 | 比 1.x 格式小 5 倍以上 | 5.1 倍：附录 A 的 2 万次移动，1.x 格式 gzip 后 156.2 KB，TimeCat 30.9 KB（含 chunk 头）。余量不大，见下文 |
-| Seek | 1 小时会话内任意位置 ≤ 300ms | 100 次随机 seek 最慢 77.5ms，中位数 47.5ms；CPU 降速 4 倍时中位数 265ms，有 21 次超过 300ms |
-| 对标 rrweb 2.1 | 主线程 CPU 和数据量都不劣于 rrweb，以公开的基准结果为准 | 数据量是 rrweb 的 25%–50%；主线程开销在 `snapshot-large` 和 `pointer-scroll` 是 rrweb 的 48% 和 56%，`typing` 低 16%，`mutations` 持平，其中脚本时间低约 1/3 |
+| Seek | 1 小时会话内任意位置 ≤ 300ms | 100 次随机 seek 最慢 76.5ms，中位数 40.9ms；CPU 降速 4 倍时中位数 258ms，有 22 次超过 300ms。只有局部在变的页面，降速 4 倍时最慢 191ms，中位数 84ms，见下文 |
+| 对标 rrweb 2.1 | 主线程 CPU 和数据量都不劣于 rrweb，以公开的基准结果为准 | 数据量是 rrweb 的 25%–50%；主线程开销在 `snapshot-large`、`pointer-scroll` 和 `typing` 是 rrweb 的 51%、61% 和 64%，`mutations` 在噪声范围内持平（这一轮多 13%），其中脚本时间低约 1/4 |
 
-M1 的测量方法和完整结果见 [`apps/bench`](../apps/bench)。和 1.x 的两项对比，1.x 一侧用附录 A 的序列化方式（对象树，每次移动一个对象），算在同样的数据上；TimeCat 一侧是录制器实际写出的数据，经过 Capture 和 Pipeline，按 chunk 压缩。
+测量方法和 M1、M2 两轮的完整结果见 [`apps/bench`](../apps/bench)。和 1.x 的两项对比，1.x 一侧用附录 A 的序列化方式（对象树，每次移动一个对象），算在同样的数据上；TimeCat 一侧是录制器实际写出的数据，经过 Capture 和 Pipeline，按 chunk 压缩。
 
 - **指针轨迹**：附录 A 的原型把 2 万次移动写成一整段再压缩，所以有 6.3 倍。真实的录制器每秒写一批、每 5 秒一个 chunk，各自压缩，小 chunk 压缩率低，按一阶差分只有 4.3 倍（36.1 KB，同样含 chunk 头），没有达标。M1 把指针的三列改成二阶差分（RFC 0002 第 6.8 节）后是 5.1 倍。要拉开余量，可以让指针轨道的 chunk 跨度更长，或者让 chunk 用不带 gzip 头尾的 deflate。
-- **Seek**：不降速时离目标还有约 4 倍的余量。CPU 降速 4 倍时，缩小关键帧间隔没有帮助（`keyframeInterval` 从 2000 改成 1000，中位数仍是 260ms），可见耗时主要在从关键帧重建页面本身（解压、构建 DOM、样式和布局），不在之后的事件上。留到 M2 优化。
+- **Seek**：不降速时离目标还有约 4 倍的余量。M1 发现 CPU 降速 4 倍时缩小关键帧间隔没有帮助（`keyframeInterval` 从 2000 改成 1000，中位数仍是 260ms），耗时在从关键帧重建页面本身，不在之后的事件上。M2 用 profiler 拆开看：在看板页上，主线程时间八成以上是浏览器的样式、布局和绘制，解压和构建 DOM 的脚本只占一成多，只优化脚本省不下多少。
+
+  所以 M2 改为复用节点：恢复关键帧时把回放的页面改成关键帧的样子，而不是整棵重建。id 相同、只含标记的节点留下，补上关键帧的属性和文字，其余的新建、移动或删除；表单控件、脚本和 CSSOM 改过的 `<style>` 带着关键帧描述不了的状态，照旧新建。留下的节点不用重新算样式、布局和绘制，图片和 frame 也不会重新加载。属性测试随机生成变更序列来验证：从回放的任何状态恢复任一关键帧，再应用之后的事件，结果和一路播放下来的一样。
+
+  效果取决于页面在两个关键帧之间变了多少。只有局部在变时（看板 200 行里只有 10 行在变），降速 4 倍的 seek 中位数减半，布局、样式和绘制分别少了 72%、83% 和 52%，100 次 seek 都在目标以内。基准默认的看板每秒改 200 个单元格，两个关键帧之间 1000 个单元格几乎全换过，表格还是要整个重新布局，和 M1 没有差别，CPU 降速 4 倍时仍有约两成 seek 超过 300ms。这部分时间花在浏览器渲染录制的页面上，页面本身越重越慢。
 
 ## 9. 里程碑
 
@@ -334,7 +339,7 @@ M1 的测量方法和完整结果见 [`apps/bench`](../apps/bench)。和 1.x 的
 |---|---|
 | M0 地基（已完成） | monorepo、工具链、三浏览器 CI、基准框架（含 rrweb 对标）、TCR 格式规范 v0；换掉旧 `.gitignore`（旧规则忽略了 `docs`、`examples`、`test*` 这些常用名字）。产出见 [`packages/protocol`](../packages/protocol)、[`apps/bench`](../apps/bench)（含 rrweb 基线）、[RFC 0002](./0002-tcr-format.md) |
 | M1 录制核心 + 最小回放（已完成） | 分片快照、按任务合并且每帧都写的增量（第 3.3 节）、输入（含脱敏）/ 指针 / 滚动 / 视口 / 导航；Worker 管线（编码、压缩、OPFS、导出）；player-core 的播放和 seek；保真测试套件。产出见 [`packages/recorder`](../packages/recorder)、[`packages/player-core`](../packages/player-core)、[保真测试](../packages/recorder/test/fidelity)，以及 [`apps/bench`](../apps/bench) 里和 rrweb 的对比与 seek 基准，实测结果见第 8 节 |
-| M2 平台覆盖与回放体验 | Shadow DOM、Constructable Stylesheets / CSSOM、iframe、字体和 `blob:` 资源；`<timecat-player>` UI；导出为单个 HTML 文件；console、network、perf 插件 |
+| M2 平台覆盖与回放体验（已完成） | Shadow DOM、Constructable Stylesheets / CSSOM、iframe、字体和 `blob:` 资源；`<timecat-player>` UI；导出为单个 HTML 文件；console、network、perf 插件；seek 时把页面改成关键帧的样子，而不是整棵重建（第 8 节）。产出见 [`packages/player`](../packages/player)、[`packages/plugin-console`](../packages/plugin-console)、[`packages/plugin-network`](../packages/plugin-network)、[`packages/plugin-perf`](../packages/plugin-perf)，以及 [`packages/recorder`](../packages/recorder) 和 [`packages/player-core`](../packages/player-core) 里新增的平台覆盖和[保真测试](../packages/recorder/test/fidelity) |
 | M3 媒体与实时 | Canvas / 视频轨（WebCodecs）、麦克风旁白、实时模式 |
 | M4 服务端与 AI（暂缓） | 接入服务、存储、控制台；语义转写、摘要、批量分析；MCP Server；生成 Playwright 用例。按第 10 节的决定，不在当前范围内 |
 

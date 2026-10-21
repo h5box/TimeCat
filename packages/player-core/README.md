@@ -68,9 +68,13 @@ top. Recorded snapshots are keyframes already. The model follows the DOM's rules
 shows what applying the events before it shows: a second shadow root on a host is left out, and a `<style>` whose
 children or type change parses its text anew, losing what the CSSOM changed.
 
-**Seeking.** A seek goes forward through the events when that is cheaper than rebuilding, and otherwise builds the
-DOM from the last keyframe before the target and applies the events after it, so its cost is bounded by the keyframe
-interval rather than by the length of the recording.
+**Seeking.** A seek goes forward through the events when that is cheaper than rebuilding, and otherwise restores
+the last keyframe before the target and applies the events after it, so its cost is bounded by the keyframe interval
+rather than by the length of the recording. Restoring a keyframe changes what the replay shows into it rather than
+building the DOM anew: nodes with the same id stay, given the keyframe's attributes and text, and only what differs
+is created, moved or removed. What stays costs no style, layout or paint, and its images and frames do not load
+again. Form controls, scripts and `<style>` elements whose rules changed through the CSSOM are made anew, since they
+hold state a keyframe does not describe.
 
 **Shadow trees and frames.** Shadow roots are attached again, open whatever their recorded mode. The documents of
 frames are built from the recording into the frames' own blank documents, in the recorded mode and with the frame's
@@ -123,6 +127,7 @@ The last two versions of Chrome, Edge, Firefox and Safari.
   by `<timecat-invalid>` so their content still shows.
 - Firefox parses the text of a `<style>` anew when its `media` or `title` changes, losing what the CSSOM changed;
   keyframes keep those changes, so after a seek such a sheet may show them.
+- After a seek, CSS transitions of the elements that stayed may run from what was shown before.
 
 ## License
 

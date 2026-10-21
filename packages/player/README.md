@@ -90,7 +90,7 @@ link.click()
 ```
 
 `exportHtml(recording, options)` resolves with a `text/html` Blob: a page with the standalone element and the
-segments in base64, a third larger than the recording plus about 115 kB of script, which plays the recording when
+segments in base64, a third larger than the recording plus about 120 kB of script, which plays the recording when
 opened from a disk, a mail or any server. It rejects with a `TcrDecodeError` for a segment that is not a recording, and
 with a `RangeError` for segments of different sessions. The element's script loads on the first call, so importing
 `exportHtml` costs little until then.

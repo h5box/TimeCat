@@ -14,6 +14,7 @@ pnpm bench --recorder timecat                # 只跑指定录制器（对照组
 pnpm bench --cpu-throttle 4                  # 用 CDP 模拟 4 倍降速的 CPU（接近中端手机）
 pnpm bench:seek                              # 1 小时会话，随机 seek 100 次
 pnpm bench:seek --minutes 10 --cpu-throttle 4
+pnpm bench:seek --live-rows 10               # 看板只有前 10 行在变，其余不动
 ```
 
 需要 Playwright 的 Chromium。可以运行 `pnpm exec playwright install chromium` 安装；如果本机已经装好了 Chromium，也可以设置 `CHROMIUM_EXECUTABLE_PATH` 直接使用。结果会打印成表格，同时写入 `results/`（不纳入版本库）。
@@ -61,7 +62,7 @@ pnpm bench:seek --minutes 10 --cpu-throttle 4
 ### 结果（2026-10-21）
 
 - 环境：Chromium 141.0.7390.37 headless，Intel Xeon 2.8 GHz × 4 vCPU，不降速 CPU。
-- 被测对象：`@rrweb/record` 2.1.7（开启 `maskAllInputs`）和 M1 的 `@timecat-js/recorder`。
+- 被测对象：`@rrweb/record` 2.1.7（开启 `maskAllInputs`）和 M1 的 `@timecat-js/recorder`。M2 的复测见下一节。
 - 方法：`pnpm bench --runs 9`，预热 1 轮，测量 9 轮取中位数。
 
 | 场景 | 录制器 | start | overhead | long tasks（最长） | 事件数 | raw | gzip | serialize |
@@ -93,19 +94,48 @@ script 每轮都很稳定（rrweb 404–454，TimeCat 295–338）；layout 和 
 - **事件数**：typing 里 TimeCat 的事件少，是因为 Playwright 的按键之间没有间隔，写出要等这一串按键处理完，多次按键就合成一个输入事件，只记最终状态。按键之间隔 20ms 以上时，每次按键都单独写出：20 次按键是 20 个事件，和 rrweb 一样。
 - 这个基准还测出过 M1 早期调度上的两个问题：每次指针移动都请求动画帧，让输入变慢；在动画帧里改 DOM 的页面，两帧的变更被合成一次写出。原因和改法见 RFC 0001 第 3.3 节。
 
+### M2 复测（2026-10-21）
+
+M2 的录制器多了 Shadow DOM、同源 iframe、CSSOM、字体和 `blob:` 内容的录制，以及插件接口（基准里不开插件）。环境和方法同上，重跑一遍：
+
+| 场景 | 录制器 | start | overhead | long tasks（最长） | 事件数 | raw | gzip | serialize |
+|---|---|---|---|---|---|---|---|---|
+| snapshot-large | rrweb | 431.1 ms | 439.4 ms | 1（431 ms） | 2 | 6895 KB | 256.7 KB | 156.2 ms |
+| | TimeCat | 12.6 ms | 225.8 ms | 0 | 2 | 2945 KB | 64.9 KB | 0.2 ms |
+| mutations | rrweb | 38.7 ms | 338.0 ms | 0 | 302 | 953 KB | 126.5 KB | 11.2 ms |
+| | TimeCat | 11.9 ms | 382.1 ms | 0 | 302 | 135 KB | 63.6 KB | 0.2 ms |
+| typing | rrweb | 17.3 ms | 34.4 ms | 0 | 216 | 28 KB | 2.3 KB | 0.5 ms |
+| | TimeCat | 6.7 ms | 22.0 ms | 0 | 29 | 2.2 KB | 1.0 KB | 0.2 ms |
+| pointer-scroll | rrweb | 124.1 ms | 180.3 ms | 1（124 ms） | 36 | 1725 KB | 67.7 KB | 30.1 ms |
+| | TimeCat | 12.4 ms | 109.5 ms | 0 | 29 | 741 KB | 18.5 KB | 0.3 ms |
+
+pointer-scroll 一行是另跑 21 轮的结果：9 轮时 TimeCat 的 overhead 是 145.6ms，rrweb 165.4ms，差距比别的轮次小得多，多跑几轮回到了 M1 的水平。这次机器比测 M1 时快，对照组的 main thread 短了 14%–37%，所以只看和 rrweb 的相对关系：
+
+- **数据量**和 M1 相同。新增的录制内容，这些页面用不到，也就不占数据。
+- **长任务**仍然没有，start 仍在 7–13ms。
+- **主线程开销**：snapshot-large 是 rrweb 的 51%（M1 是 48%），pointer-scroll 61%（56%），typing 64%（84%），mutations 多 13%（多 9%）。overhead 是两个中位数相减，噪声大；比较稳定的是 script 比对照组多出的部分：mutations 里 TimeCat 229ms、rrweb 300ms（M1 是 220ms 和 346ms），pointer-scroll 里 44ms 和 141ms（M1 是 42ms 和 176ms）。TimeCat 的脚本时间和 M1 基本持平，M2 新增的录制在这些页面上没有带来可见的开销。
+
 ## Seek 基准
 
 - 在看板夹具（`dashboard.html`）上录一段 60 分钟、每秒 10 帧的会话，共 3.6 万帧，每帧的变更和 `mutations` 场景相同。录制用的是 `record()` 内部同样的 Capture 和 Pipeline，只是时钟由基准自己推进，所以一小时的会话十几秒就能录完。
 - 用 `@timecat-js/player-core` 加载录制（在 Worker 里建索引、生成关键帧），再按固定种子随机 seek 100 次，一次接一次。每次 seek 的耗时包括 seek 之后的样式计算和布局。
 - 关键帧间隔用 player-core 的默认值，可以用 `--keyframe-interval` 修改。`--cpu-throttle` 在录制之后才生效，只影响回放。
+- 看板的 200 行默认全都在变，两个关键帧之间 1000 个单元格几乎都改过一遍。`--live-rows N` 只让前 N 行变化，其余保持原样，模拟只有局部在变的页面。
 
-2026-10-21 实测，环境同上：
+2026-10-21 实测，环境同上，M2 的 `@timecat-js/player-core`：
 
-| CPU | 录制大小 | 加载 | seek 中位数 | p95 | 最慢 |
-|---|---|---|---|---|---|
-| 不降速 | 7.5 MB | 3.4 s | 47.5 ms | 69.6 ms | 77.5 ms |
-| 降速 4 倍 | 7.5 MB | 4.4 s | 265.1 ms | 349.4 ms | 466.0 ms |
+| 变化的行 | CPU | 录制大小 | 加载 | seek 中位数 | p95 | 最慢 | 超过 300ms |
+|---|---|---|---|---|---|---|---|
+| 全部 200 行 | 不降速 | 7.5 MB | 3.0 s | 40.9 ms | 64.3 ms | 76.5 ms | 0 |
+| | 降速 4 倍 | 7.5 MB | 3.9 s | 257.9 ms | 375.3 ms | 413.7 ms | 22 次 |
+| 前 10 行 | 不降速 | 5.5 MB | 2.1 s | 15.4 ms | 30.3 ms | 35.7 ms | 0 |
+| | 降速 4 倍 | 5.5 MB | 2.8 s | 84.3 ms | 145.2 ms | 190.7 ms | 0 |
 
-不降速时 100 次 seek 都在 RFC 0001 的 300ms 目标以内；CPU 降速 4 倍时有 21 次超过，原因见 RFC 0001 第 8 节。加载要把整个录制过一遍，时间随录制长度增长。
+M1 在同一台机器上的结果是全部行、不降速时中位数 47.5ms，降速 4 倍时 265.1ms、21 次超过 300ms。加载要把整个录制过一遍，时间随录制长度增长。
 
-这些数字和机器有关，只用来在同一台机器上做相对比较。
+M2 恢复关键帧时不再整棵重建，而是把页面改成关键帧的样子，id 相同的节点留下（RFC 0001 第 8 节）。它对两种页面的效果不同：
+
+- **只有局部在变**（前 10 行）：留下的节点不用重新算样式、布局和绘制。降速 4 倍、开着 profiler 对比，seek 中位数从约 214ms 降到约 103ms，布局、样式和绘制的时间分别少了 72%、83% 和 52%。
+- **整页都在变**（全部行）：两个关键帧之间几乎每个单元格都换过文字，节点留下了，表格还是要整个重新布局和绘制。新旧实现交替各跑两轮，降速 4 倍时中位数是 219/244ms 对 230/221ms，没有差别。这时主线程的时间八成以上花在浏览器的样式、布局和绘制上，构建 DOM 的脚本只占一成多，所以 CPU 降速 4 倍时仍有约两成 seek 超过 300ms。
+
+这些数字和机器有关，只用来在同一台机器上做相对比较。这台虚拟机的噪声也不小：同样的配置，降速 4 倍的中位数在不同时间运行能差出几十毫秒，比较两种实现要交替多跑几轮。

@@ -4,9 +4,9 @@
 
 <p align="center">English | <a href="./README.zh-CN.md">中文</a></p>
 
-> **Rewrite in progress.** TimeCat is being rebuilt from scratch. The recorder and a replay engine without UI (M1)
-> are in place, but nothing is published yet and the recording format may still change; the player UI comes next.
-> See [RFC 0001](./rfcs/0001-timecat-next.md) for the architecture and roadmap.
+> **Rewrite in progress.** TimeCat is being rebuilt from scratch. The recorder, the replay engine and the player
+> (M1 and M2) are in place, but nothing is published yet and the recording format may still change; canvas, media
+> and live mode come next. See [RFC 0001](./rfcs/0001-timecat-next.md) for the architecture and roadmap.
 
 TimeCat records what happens in a web page (DOM changes, input, scrolling, pointer movement) and replays it like a
 video, without capturing actual video frames.
@@ -27,8 +27,8 @@ video, without capturing actual video frames.
 | Package | Status |
 | --- | --- |
 | [`@timecat-js/protocol`](./packages/protocol) | v0 draft: binary primitives, string tables, chunk container, event payloads |
-| [`@timecat-js/recorder`](./packages/recorder) | M1: time-sliced snapshots, coalesced changes, input (masked), pointer, scroll, viewport and navigation; compression and storage in a worker |
-| [`@timecat-js/player-core`](./packages/player-core) | M1: replay without UI, indexed in a worker, seeking through keyframes, in a sandbox |
+| [`@timecat-js/recorder`](./packages/recorder) | M1: time-sliced snapshots, coalesced changes, input (masked), pointer, scroll, viewport and navigation; compression and storage in a worker. M2: shadow trees, same-origin frames, CSSOM changes, adopted sheets, fonts and `blob:` content; plugins and events of the application |
+| [`@timecat-js/player-core`](./packages/player-core) | M1: replay without UI, indexed in a worker, seeking through keyframes, in a sandbox. M2: what the recorder added in M2; seeks change only what differs from what is shown |
 | [`@timecat-js/plugin-console`](./packages/plugin-console) | M2: console messages, uncaught errors and unhandled rejections |
 | [`@timecat-js/plugin-network`](./packages/plugin-network) | M2: requests made with `fetch`, XHR and `sendBeacon`, and the resources a page loads |
 | [`@timecat-js/plugin-perf`](./packages/plugin-perf) | M2: LCP, CLS, INP, FCP, TTFB and long animation frames |
