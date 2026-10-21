@@ -147,6 +147,19 @@ export const styles: CSSResult = css`
         width: 36px;
         height: 36px;
     }
+    .unmute {
+        position: absolute;
+        top: 12px;
+        left: 12px;
+        height: 32px;
+        padding: 0 12px 0 8px;
+        border-radius: 16px;
+        background: rgb(0 0 0 / 0.7);
+        color: #fff;
+    }
+    .unmute:hover:not(:disabled) {
+        background: rgb(0 0 0 / 0.85);
+    }
 
     .controls {
         display: flex;
@@ -159,6 +172,35 @@ export const styles: CSSResult = css`
         padding: 0 4px;
         white-space: nowrap;
         font-variant-numeric: tabular-nums;
+    }
+    .volume {
+        display: flex;
+        align-items: center;
+    }
+    .volume input {
+        width: 64px;
+        margin: 0 4px 0 0;
+        accent-color: var(--accent);
+    }
+    .live {
+        gap: 6px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+    .live.edge {
+        color: var(--color);
+    }
+    .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+    }
+    .live.edge .dot {
+        background: var(--error);
     }
     .timeline {
         position: relative;

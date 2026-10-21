@@ -1,10 +1,13 @@
 import { consolePlugin } from '@timecat-js/plugin-console'
+import { mediaPlugin } from '@timecat-js/plugin-media'
 import { record } from '@timecat-js/recorder'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { toBase64 } from '../src/embed.ts'
 import { TimecatPlayer } from '../src/index.ts'
 
 let recording: Blob
+/** A recording of a page with a video, whose playback state is recorded. */
+let withMedia: Blob
 
 const added: Element[] = []
 
@@ -37,6 +40,15 @@ beforeAll(async () => {
     } finally {
         error.mockRestore()
         paragraph.remove()
+    }
+    const video = document.createElement('video')
+    document.body.append(video)
+    try {
+        const recorder = record({ worker: false, plugins: [mediaPlugin()] })
+        await recorder.ready
+        withMedia = await recorder.stop()
+    } finally {
+        video.remove()
     }
 })
 
@@ -291,6 +303,130 @@ describe('<timecat-player>', () => {
         element.remove()
         expect(element.player).toBeUndefined()
         expect(parts(element, '.stage > *')).toEqual([])
+    })
+
+    it('sets the volume of recorded media, and offers to unmute them once the player muted itself', async () => {
+        const silent = await show(create(withRecording))
+        expect(parts(silent, '.volume')).toEqual([])
+        const element = await show(
+            create(target => {
+                target.recording = withMedia
+                target.volume = 0.5
+            })
+        )
+        const player = element.player!
+        expect({ hasMedia: player.hasMedia, volume: player.volume, muted: player.muted }).toEqual({
+            hasMedia: true,
+            volume: 0.5,
+            muted: false
+        })
+        const volumechange = vi.fn<() => void>()
+        element.addEventListener('volumechange', volumechange)
+        const slider = partOf(element, '.volume input', HTMLInputElement)
+        expect(slider.value).toBe('0.5')
+        slider.value = '0.25'
+        slider.dispatchEvent(new Event('input'))
+        await element.updateComplete
+        expect({ volume: element.volume, player: player.volume }).toEqual({ volume: 0.25, player: 0.25 })
+        part(element, '.mute').click()
+        await element.updateComplete
+        expect({ muted: element.muted, player: player.muted, slider: slider.value }).toEqual({
+            muted: true,
+            player: true,
+            slider: '0'
+        })
+        expect(part(element, '.mute').getAttribute('aria-label')).toBe('Unmute')
+        press(element, 'm')
+        await element.updateComplete
+        expect({ muted: element.muted, player: player.muted, slider: slider.value }).toEqual({
+            muted: false,
+            player: false,
+            slider: '0.25'
+        })
+        expect(volumechange).toHaveBeenCalledTimes(3)
+        expect(parts(element, '.unmute')).toEqual([])
+        // As when the browser does not let media play with sound before the viewer interacted with the page.
+        player.muted = true
+        await element.updateComplete
+        expect(element.muted).toBe(true)
+        part(element, '.unmute').click()
+        await element.updateComplete
+        expect({ muted: element.muted, player: player.muted }).toEqual({ muted: false, player: false })
+        expect(parts(element, '.unmute')).toEqual([])
+        // Muted from the start, as asked.
+        const muted = await show(
+            create(target => {
+                target.recording = withMedia
+                target.setAttribute('muted', '')
+            })
+        )
+        expect(muted.player!.muted).toBe(true)
+        expect(parts(muted, '.unmute')).toEqual([])
+    })
+
+    it('plays a stream live, and goes back to its edge', async () => {
+        let controller: ReadableStreamDefaultController<Uint8Array> | undefined
+        const stream = new ReadableStream<Uint8Array>({
+            start(streamController) {
+                controller = streamController
+            }
+        })
+        const paragraph = document.createElement('p')
+        paragraph.textContent = 'live'
+        document.body.append(paragraph)
+        const recorder = record({ worker: false, latency: 100, onData: bytes => controller!.enqueue(bytes) })
+        try {
+            await recorder.ready
+            const element = await show(
+                create(target => {
+                    target.recording = stream
+                })
+            )
+            const live = (): HTMLElement => part(element, '.live')
+            expect({ live: element.live, paused: element.paused, edge: live().classList.contains('edge') }).toEqual({
+                live: true,
+                paused: true,
+                edge: false
+            })
+            expect(replayed(element)).toEqual(['live'])
+            live().click()
+            await element.updateComplete
+            expect({ paused: element.paused, edge: live().classList.contains('edge') }).toEqual({
+                paused: false,
+                edge: true
+            })
+            expect(live().getAttribute('aria-label')).toBe('Live')
+            // More comes as it is recorded: the timeline and the events grow.
+            const duration = element.duration
+            paragraph.textContent = 'later'
+            recorder.addEvent('checkout', { total: 3 })
+            await vi.waitFor(() => expect(replayed(element)).toEqual(['later']))
+            expect(element.duration).toBeGreaterThan(duration)
+            expect(part(element, '.events .count').textContent).toBe('1')
+            press(element, 'Home')
+            await element.updateComplete
+            expect({ paused: element.paused, edge: live().classList.contains('edge') }).toEqual({
+                paused: false,
+                edge: false
+            })
+            expect(live().getAttribute('aria-label')).toBe('Go live')
+            live().click()
+            await element.updateComplete
+            expect(live().classList.contains('edge')).toBe(true)
+            // Paused, it falls behind.
+            element.pause()
+            await element.updateComplete
+            expect(live().classList.contains('edge')).toBe(false)
+            const ended = next(element, 'durationchange')
+            await recorder.stop()
+            controller!.close()
+            await ended
+            await vi.waitFor(() => expect(element.live).toBe(false))
+            await element.updateComplete
+            expect(parts(element, '.live')).toEqual([])
+        } finally {
+            paragraph.remove()
+        }
     })
 
     it('plays once loaded when asked to before, or when autoplay is set', async () => {

@@ -234,6 +234,7 @@ describe('media', () => {
             { time: 500, event: pageOf([{ tag: 'video' }]) }
         ]
         const player = await open(writeRecording(events))
+        expect(player.hasMedia).toBe(true)
         const video = (): HTMLVideoElement => player.document.querySelector('video')!
         const volumechange = vi.fn<() => void>()
         player.addEventListener('volumechange', volumechange)

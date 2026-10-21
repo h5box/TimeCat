@@ -311,6 +311,9 @@ importers:
       '@timecat-js/plugin-console':
         specifier: workspace:^
         version: link:../plugin-console
+      '@timecat-js/plugin-media':
+        specifier: workspace:^
+        version: link:../plugin-media
       '@timecat-js/recorder':
         specifier: workspace:^
         version: link:../recorder

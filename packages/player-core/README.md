@@ -62,6 +62,7 @@ to where it ends, and `player.warnings` says what was left out.
 | `sessionId`, `startedAt`, `meta` | From the recording's header. `startedAt` is in epoch milliseconds. |
 | `duration`, `currentTime` | In milliseconds from the first recorded event. |
 | `live` | More of the recording is to come, from a stream. |
+| `hasMedia` | The recording has media to play: tracks of the plugins, such as narration and the video of canvases, or media elements whose playback state was recorded. |
 | `paused`, `speed` | Playback state; `speed` can be changed while playing. |
 | `volume`, `muted` | How loud recorded media and narration play, from 0 to 1, and whether they are silent. A browser that does not let them play with sound before the viewer interacted with the page makes the player mute itself. |
 | `play()`, `pause()` | Play from the current time, or from the start once ended; while live, at the edge, wait for more. |

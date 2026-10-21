@@ -63,6 +63,7 @@
     "devDependencies": {
         "@arethetypeswrong/core": "catalog:",
         "@timecat-js/plugin-console": "workspace:^",
+        "@timecat-js/plugin-media": "workspace:^",
         "@timecat-js/recorder": "workspace:^",
         "publint": "catalog:",
         "tsdown": "catalog:",

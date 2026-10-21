@@ -79,6 +79,11 @@ export interface Player extends EventTarget {
      * waits for more rather than ending.
      */
     readonly live: boolean
+    /**
+     * The recording has media to play: tracks, such as narration or the video of a canvas, or media elements that
+     * play. A live recording may get some later, with `durationchange`.
+     */
+    readonly hasMedia: boolean
     readonly currentTime: number
     readonly paused: boolean
     /** Playback rate; 1 is real time. */
@@ -307,6 +312,10 @@ class ReplayPlayer extends EventTarget implements Player {
 
     get live(): boolean {
         return !this.#timeline.done
+    }
+
+    get hasMedia(): boolean {
+        return this.#timeline.hasMedia
     }
 
     get currentTime(): number {

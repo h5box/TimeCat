@@ -57,6 +57,9 @@ function start(view: Window & typeof globalThis, options: ConsolePluginOptions =
         openMedia() {
             throw new Error('plugins of this kind write no media')
         },
+        ready: Promise.resolve(),
+        blocks: () => false,
+        observeRoots: observer => observer(view.document),
         nodeId: () => 0,
         onError: error => void errors.push(error)
     }

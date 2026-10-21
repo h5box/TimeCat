@@ -33,6 +33,9 @@ function start(options: PerfPluginOptions = {}) {
         openMedia() {
             throw new Error('plugins of this kind write no media')
         },
+        ready: Promise.resolve(),
+        blocks: () => false,
+        observeRoots: observer => observer(document),
         nodeId: node => ids.get(node) ?? 0,
         onError: error => void errors.push(error)
     }

@@ -1,5 +1,5 @@
 import { createPlayer } from '@timecat-js/player-core'
-import type { Player, RecordingSource } from '@timecat-js/player-core'
+import type { Player, RecordingSource, TimedEvent } from '@timecat-js/player-core'
 import { html, LitElement, nothing, svg } from 'lit'
 import type { CSSResultGroup, PropertyDeclarations, PropertyValues, SVGTemplateResult, TemplateResult } from 'lit'
 import { classMap } from 'lit/directives/class-map.js'
@@ -10,6 +10,8 @@ import { countUntil, formatTime, markersOf, toEntry } from './format.ts'
 import type { Entry, Kind } from './format.ts'
 import { styles } from './styles.ts'
 
+/** A recording, as `createPlayer` takes: one segment, the segments of a session, or a stream. */
+type Source = RecordingSource | readonly RecordingSource[] | ReadableStream<Uint8Array>
 type Status = 'empty' | 'loading' | 'ready' | 'error'
 type Filter = 'all' | Kind
 
@@ -23,22 +25,26 @@ const FILTERS: readonly { readonly filter: Filter; readonly label: string }[] = 
 ]
 /** How far the arrow keys move. */
 const STEP = 5000
-const PLAYER_EVENTS = ['play', 'pause', 'ended', 'timeupdate']
+const PLAYER_EVENTS = ['play', 'pause', 'ended', 'timeupdate', 'durationchange', 'volumechange']
 
 const ICONS = {
     play: svg`<path d="M8 5v14l11-7z"/>`,
     pause: svg`<path d="M6 5h4v14H6zm8 0h4v14h-4z"/>`,
     list: svg`<path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h10v2H4z"/>`,
     expand: svg`<path d="M4 4h6v2H6v4H4zm10 0h6v6h-2V6h-4zM4 14h2v4h4v2H4zm14 0h2v6h-6v-2h4z"/>`,
-    shrink: svg`<path d="M8 4h2v6H4V8h4zm6 0h2v4h4v2h-6zM4 14h6v6H8v-4H4zm10 0h6v2h-4v4h-2z"/>`
+    shrink: svg`<path d="M8 4h2v6H4V8h4zm6 0h2v4h4v2h-6zM4 14h6v6H8v-4H4zm10 0h6v2h-4v4h-2z"/>`,
+    loud: svg`<path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>`,
+    quiet: svg`<path d="M18.5 12A4.5 4.5 0 0 0 16 7.97v8.05c1.48-.73 2.5-2.25 2.5-4.02zM5 9v6h4l5 5V4L9 9H5z"/>`,
+    mute: svg`<path d="M16.5 12A4.5 4.5 0 0 0 14 7.97v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51A8.8 8.8 0 0 0 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06a8.99 8.99 0 0 0 3.69-1.81L19.73 21 21 19.73l-9-9zM12 4 9.91 6.09 12 8.18z"/>`
 }
 
 /**
  * `<timecat-player>`: plays a recording, with controls, a timeline that marks errors and the events of the
  * application, and a panel listing what was recorded beside the page. The recording comes from the `recording`
  * property, the `src` attribute or `<script type="application/x-timecat-recording">` children holding its
- * segments in base64, in that order. Dispatches `load` once a recording is shown, `error` when one cannot be,
- * and `play`, `pause`, `ended` and `timeupdate` as the player does.
+ * segments in base64, in that order; a stream of a recording plays live. Dispatches `load` once a recording is
+ * shown, `error` when one cannot be, and `play`, `pause`, `ended`, `timeupdate`, `durationchange` and
+ * `volumechange` as the player does.
  */
 export class TimecatPlayer extends LitElement {
     static override properties: PropertyDeclarations = {
@@ -46,6 +52,8 @@ export class TimecatPlayer extends LitElement {
         recording: { attribute: false },
         autoplay: { type: Boolean },
         speed: { type: Number },
+        volume: { type: Number },
+        muted: { type: Boolean },
         worker: { attribute: false },
         panel: { type: Boolean, reflect: true }
     }
@@ -54,12 +62,19 @@ export class TimecatPlayer extends LitElement {
 
     /** URL of the recording, or URLs of its segments, separated by spaces. */
     declare src: string | null
-    /** The recording, which takes the place of `src`: one segment or all of a session, as `createPlayer` takes. */
-    declare recording: RecordingSource | readonly RecordingSource[] | undefined
+    /**
+     * The recording, which takes the place of `src`: one segment or all of a session, or a stream that plays as it
+     * comes, as `createPlayer` takes.
+     */
+    declare recording: Source | undefined
     /** Starts playing once loaded. */
     declare autoplay: boolean
     /** Playback rate; 1 is real time. */
     declare speed: number
+    /** Volume of the recorded media, from 0 to 1. */
+    declare volume: number
+    /** Mutes the recorded media. The player mutes itself when the browser lets them play with no sound only. */
+    declare muted: boolean
     /** Where the recording is indexed, as `createPlayer`'s `worker` option. */
     declare worker: boolean | string | URL
     /** Shows the panel of events recorded beside the page. */
@@ -71,7 +86,10 @@ export class TimecatPlayer extends LitElement {
     /** Counts loads, so a load that another replaced leaves no trace. */
     #generation = 0
     #playOnLoad = false
+    /** The events of the player that `#entries` shows, which grow while it is live. */
+    #events: readonly TimedEvent[] = []
     #entries: readonly Entry[] = []
+    readonly #entryOf = new WeakMap<TimedEvent, Entry>()
     #counts = new Map<Filter, number>()
     #filter: Filter = 'all'
     #search = ''
@@ -80,6 +98,10 @@ export class TimecatPlayer extends LitElement {
     /** The time under the pointer on the timeline. */
     #hover: number | undefined
     #dragging = false
+    /** The player muted itself, as the browser let the media play with no sound only. */
+    #blocked = false
+    /** Shows a live recording away from its edge, where it was moved or paused. */
+    #behind = false
 
     constructor() {
         super()
@@ -87,6 +109,8 @@ export class TimecatPlayer extends LitElement {
         this.recording = undefined
         this.autoplay = false
         this.speed = 1
+        this.volume = 1
+        this.muted = false
         this.worker = true
         this.panel = false
         this.addEventListener('keydown', this.#onKeydown)
@@ -111,6 +135,11 @@ export class TimecatPlayer extends LitElement {
         return this.#player?.paused ?? !this.#playOnLoad
     }
 
+    /** More of the recording is to come, from a stream. */
+    get live(): boolean {
+        return this.#player?.live ?? false
+    }
+
     /** Plays, as soon as the recording is loaded if it is not yet. */
     play(): void {
         if (this.#player === undefined) {
@@ -127,6 +156,7 @@ export class TimecatPlayer extends LitElement {
 
     /** Moves to `time`, in milliseconds. Resolves once the replay shows it. */
     async seek(time: number): Promise<void> {
+        this.#leaveEdge(time)
         await this.#player?.seek(time)
     }
 
@@ -145,10 +175,22 @@ export class TimecatPlayer extends LitElement {
     }
 
     protected override willUpdate(changed: PropertyValues<this>): void {
+        if (changed.has('muted') && !this.muted) {
+            this.#blocked = false
+        }
+        const player = this.#player
         if (changed.has('src') || changed.has('recording') || changed.has('worker')) {
             void this.#load()
-        } else if (changed.has('speed') && this.#player !== undefined && isSpeed(this.speed)) {
-            this.#player.speed = this.speed
+        } else if (player !== undefined) {
+            if (changed.has('speed') && isSpeed(this.speed)) {
+                player.speed = this.speed
+            }
+            if (changed.has('volume') && isVolume(this.volume)) {
+                player.volume = this.volume
+            }
+            if (changed.has('muted')) {
+                player.muted = this.muted
+            }
         }
     }
 
@@ -165,6 +207,13 @@ export class TimecatPlayer extends LitElement {
                 <div class="screen">
                     <div class="stage" part="stage"></div>
                     <div class="overlay" tabindex="-1" @click=${this.#toggle}>${this.#renderOverlay(paused)}</div>
+                    ${
+                        this.#blocked
+                            ? html`<button class="unmute" title="The browser muted the replay" @click=${this.#unmute}>
+                                  ${icon(ICONS.mute)}Unmute
+                              </button>`
+                            : nothing
+                    }
                 </div>
                 ${this.panel ? this.#renderPanel(time) : nothing}
             </div>
@@ -178,7 +227,9 @@ export class TimecatPlayer extends LitElement {
                 >
                     ${icon(paused ? ICONS.play : ICONS.pause)}
                 </button>
+                ${player?.hasMedia === true ? this.#renderVolume() : nothing}
                 <span class="time">${formatTime(time)} / ${formatTime(duration)}</span>
+                ${player?.live === true ? this.#renderLive(paused) : nothing}
                 <div
                     class="timeline"
                     part="timeline"
@@ -258,6 +309,42 @@ export class TimecatPlayer extends LitElement {
             default:
                 return paused ? html`<div class="big-play" aria-hidden="true">${icon(ICONS.play)}</div>` : nothing
         }
+    }
+
+    #renderVolume(): TemplateResult {
+        const silent = this.muted || this.volume === 0
+        return html`<div class="volume">
+            <button
+                class="mute"
+                aria-label=${this.muted ? 'Unmute' : 'Mute'}
+                title=${this.muted ? 'Unmute (m)' : 'Mute (m)'}
+                @click=${this.#toggleMute}
+            >
+                ${icon(silent ? ICONS.mute : this.volume < 0.5 ? ICONS.quiet : ICONS.loud)}
+            </button>
+            <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                aria-label="Volume"
+                .value=${String(this.muted ? 0 : this.volume)}
+                @input=${this.#onVolume}
+            />
+        </div>`
+    }
+
+    /** Whether the replay shows the edge of a live recording, or offers to go there. */
+    #renderLive(paused: boolean): TemplateResult {
+        const edge = !paused && !this.#behind
+        return html`<button
+            class=${classMap({ live: true, edge })}
+            aria-label=${edge ? 'Live' : 'Go live'}
+            title=${edge ? 'Playing live' : 'Go live (End)'}
+            @click=${this.#goLive}
+        >
+            <span class="dot"></span>Live
+        </button>`
     }
 
     #renderPanel(time: number): TemplateResult {
@@ -370,7 +457,7 @@ export class TimecatPlayer extends LitElement {
      * Loads the recording, from the property, `src` or the element's children, in that order. `undefined` when
      * there is none, and may be none once the page is parsed.
      */
-    #sources(): Promise<RecordingSource | readonly RecordingSource[] | undefined> | undefined {
+    #sources(): Promise<Source | undefined> | undefined {
         if (this.recording !== undefined) {
             return Promise.resolve(this.recording)
         }
@@ -404,14 +491,14 @@ export class TimecatPlayer extends LitElement {
 
     #show(player: Player): void {
         this.#player = player
+        player.volume = isVolume(this.volume) ? this.volume : 1
+        player.muted = this.muted
         for (const type of PLAYER_EVENTS) {
             player.addEventListener(type, this.#onPlayerEvent)
         }
-        this.#entries = player.events.map(toEntry)
-        this.#counts = new Map<Filter, number>([['all', this.#entries.length]])
-        for (const entry of this.#entries) {
-            this.#counts.set(entry.kind, (this.#counts.get(entry.kind) ?? 0) + 1)
-        }
+        this.#takeEvents(player)
+        // It starts paused.
+        this.#behind = player.live
         this.#selected = undefined
         this.#status = 'ready'
         this.requestUpdate()
@@ -431,8 +518,11 @@ export class TimecatPlayer extends LitElement {
             player.destroy()
         }
         this.#player = undefined
+        this.#events = []
         this.#entries = []
         this.#counts = new Map()
+        this.#blocked = false
+        this.#behind = false
         this.#status = 'empty'
         this.#error = ''
         this.#hover = undefined
@@ -440,7 +530,49 @@ export class TimecatPlayer extends LitElement {
         this.requestUpdate()
     }
 
+    /** Lists the events recorded beside the page so far, which grow while the recording is live. */
+    #takeEvents(player: Player): void {
+        const events = player.events
+        if (events === this.#events) {
+            return
+        }
+        this.#events = events
+        this.#entries = events.map(event => {
+            let entry = this.#entryOf.get(event)
+            if (entry === undefined) {
+                entry = toEntry(event)
+                this.#entryOf.set(event, entry)
+            }
+            return entry
+        })
+        this.#counts = new Map<Filter, number>([['all', this.#entries.length]])
+        for (const entry of this.#entries) {
+            this.#counts.set(entry.kind, (this.#counts.get(entry.kind) ?? 0) + 1)
+        }
+    }
+
     readonly #onPlayerEvent = (event: Event): void => {
+        const player = this.#player
+        if (player !== undefined) {
+            if (event.type === 'durationchange') {
+                this.#takeEvents(player)
+            } else if (event.type === 'volumechange') {
+                // Muted by the player, as the browser let the media play with no sound only.
+                if (player.muted && !this.muted) {
+                    this.#blocked = true
+                }
+                this.muted = player.muted
+                this.volume = player.volume
+            }
+            if (player.live) {
+                if (!player.paused) {
+                    // Playing at the edge, as it caught up or went there.
+                    this.#behind &&= player.currentTime < player.duration
+                } else if (event.type === 'pause') {
+                    this.#behind = true
+                }
+            }
+        }
         this.requestUpdate()
         this.dispatchEvent(new Event(event.type))
     }
@@ -455,7 +587,45 @@ export class TimecatPlayer extends LitElement {
     }
 
     #seekTo(time: number): void {
+        this.#leaveEdge(time)
         this.#player?.seek(time).catch(logError)
+    }
+
+    /** Takes it that the replay moves to `time`, which leaves the edge of a live recording, unless it plays there. */
+    #leaveEdge(time: number): void {
+        const player = this.#player
+        if (player?.live === true) {
+            this.#behind = player.paused || time < player.duration
+            this.requestUpdate()
+        }
+    }
+
+    readonly #goLive = (): void => {
+        const player = this.#player
+        if (player !== undefined) {
+            this.#seekTo(player.duration)
+            player.play()
+        }
+    }
+
+    readonly #toggleMute = (): void => {
+        const silent = this.muted || this.volume === 0
+        this.muted = !silent
+        if (silent && this.volume === 0) {
+            // Turned down all the way: unmuting turns it up.
+            this.volume = 1
+        }
+    }
+
+    readonly #unmute = (): void => {
+        this.muted = false
+    }
+
+    readonly #onVolume = (event: Event): void => {
+        if (event.target instanceof HTMLInputElement) {
+            this.volume = Number(event.target.value)
+            this.muted = false
+        }
     }
 
     readonly #onKeydown = (event: KeyboardEvent): void => {
@@ -483,6 +653,9 @@ export class TimecatPlayer extends LitElement {
                 break
             case 'k':
                 this.#toggle()
+                break
+            case 'm':
+                this.#toggleMute()
                 break
             case 'ArrowLeft':
                 this.#seekTo(player.currentTime - STEP)
@@ -586,6 +759,10 @@ async function fetchSegment(url: string): Promise<Blob> {
 
 function isSpeed(speed: number): boolean {
     return speed > 0 && Number.isFinite(speed)
+}
+
+function isVolume(volume: number): boolean {
+    return volume >= 0 && volume <= 1
 }
 
 /** The speeds offered, with the current one. */

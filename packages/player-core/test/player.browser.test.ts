@@ -115,7 +115,8 @@ describe('createPlayer', () => {
             duration: player.duration,
             currentTime: player.currentTime,
             paused: player.paused,
-            speed: player.speed
+            speed: player.speed,
+            hasMedia: player.hasMedia
         }).toEqual({
             sessionId: 'player-test',
             startedAt: SESSION.startedAt,
@@ -124,7 +125,8 @@ describe('createPlayer', () => {
             duration: 400,
             currentTime: 0,
             paused: true,
-            speed: 1
+            speed: 1,
+            hasMedia: false
         })
         expect(paragraphs(player)).toEqual(['one'])
         // The replay has the recorded viewport size.
