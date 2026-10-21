@@ -14,13 +14,14 @@ pnpm install
 
 | 命令 | 作用 |
 |---|---|
-| `pnpm check` | 提交前完整检查：格式、lint、类型、未使用代码、单元测试、构建、体积预算。CI 跑的就是这一套 |
+| `pnpm check` | 提交前完整检查：格式、lint、类型、未使用代码、单元测试、构建、体积预算。CI 跑的就是这一套，浏览器测试另外按引擎分别运行 |
 | `pnpm test` | Node 环境下的单元测试 |
 | `pnpm test:browser` | 在真实浏览器中运行测试（Chromium、Firefox、WebKit） |
 | `pnpm format` | 用 oxfmt 格式化 |
 | `pnpm build` | 用 tsdown 构建所有包，构建时同时运行 publint 和 arethetypeswrong |
 | `pnpm size` | 检查各包的体积预算（`.size-limit.json`） |
 | `pnpm bench` | 录制器性能基准，见 [`apps/bench`](./apps/bench) |
+| `pnpm bench:seek` | 回放 seek 基准：录一段 1 小时的会话，测随机 seek 的耗时 |
 
 浏览器测试需要 Playwright 的浏览器，用 `pnpm exec playwright install` 安装。本地可以用两个环境变量调整：
 
@@ -36,6 +37,8 @@ pnpm install
 | `*.browser.test.ts` | 只在浏览器中运行（需要真实 DOM、布局等） |
 
 编解码这类逻辑除了示例测试，还要用 fast-check 写基于性质的测试（往返一致、拒绝非法输入）。
+
+录制器的保真测试在 [`packages/recorder/test/fidelity`](./packages/recorder/test/fidelity)：在 iframe 里录制页面，用 player-core 回放，在每个检查点比对两边的 DOM、表单状态和滚动位置。其中的性质测试用 fast-check 生成随机的变更序列，包括快照分片之间发生的变更。改动录制或回放逻辑时，先在这里补一个能复现问题的用例。
 
 ## 代码约定
 
