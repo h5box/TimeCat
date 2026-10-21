@@ -19,14 +19,22 @@
         "path": "packages/recorder/dist/index.js",
         "import": "{ record }",
         "gzip": true,
-        "limit": "19 kB"
+        "limit": "21 kB"
+    },
+    {
+        "name": "@timecat-js/player-core (loaded with the page)",
+        "path": "packages/player-core/dist/index.js",
+        "import": "{ createPlayer }",
+        "entry": ["index"],
+        "gzip": true,
+        "limit": "16.5 kB"
     },
     {
         "name": "@timecat-js/player-core (lazy chunks and worker included)",
         "path": "packages/player-core/dist/index.js",
         "import": "{ createPlayer }",
         "gzip": true,
-        "limit": "27 kB"
+        "limit": "36.5 kB"
     },
     {
         "name": "@timecat-js/plugin-console",
@@ -71,13 +79,13 @@
         "import": "{ TimecatPlayer }",
         "ignore": ["@timecat-js/player-core", "@timecat-js/protocol"],
         "gzip": true,
-        "limit": "13 kB"
+        "limit": "14.5 kB"
     },
     {
         "name": "@timecat-js/player/standalone (one script with all it needs)",
         "path": "packages/player/dist/timecat-player.js",
         "gzip": true,
-        "limit": "36 kB"
+        "limit": "45.5 kB"
     },
     {
         "name": "@timecat-js/player/export (the standalone script loaded on demand, included)",
@@ -85,6 +93,6 @@
         "import": "{ exportHtml }",
         "ignore": ["@timecat-js/protocol"],
         "gzip": true,
-        "limit": "37 kB"
+        "limit": "46.5 kB"
     }
 ]

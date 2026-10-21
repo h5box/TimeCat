@@ -1,5 +1,11 @@
 import type { SegmentInfo } from '@timecat-js/protocol'
 
+/**
+ * How long a chunk spans at most by default, in recording time and in wall-clock time. Here rather than in the
+ * pipeline, so the page does not load the pipeline to know it.
+ */
+export const LATENCY = 5000
+
 /** Where finished chunks are kept until the recording is exported. */
 export type StorageKind = 'memory' | 'opfs'
 

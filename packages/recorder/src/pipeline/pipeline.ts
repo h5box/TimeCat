@@ -13,11 +13,10 @@ import {
 import type { MediaPacket, SegmentInfo } from '@timecat-js/protocol'
 import { readBatch } from '../batch.ts'
 import type { BatchTarget } from '../batch.ts'
+import { LATENCY } from './messages.ts'
 
 /** A chunk ends before its payload grows past this, so it usually stays within 64 KiB compressed (RFC 0002, 4.2). */
 const MAX_PAYLOAD = 128 * 1024
-/** How long a chunk spans at most by default, in recording time and in wall-clock time. */
-export const LATENCY = 5000
 /** Below this, gzip's own overhead outweighs what it saves. */
 const MIN_COMPRESSED = 128
 /** How often open chunks are checked for their wall-clock age. */

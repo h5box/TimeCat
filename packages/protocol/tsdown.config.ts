@@ -8,6 +8,9 @@ export default defineConfig({
     target: ['chrome111', 'edge111', 'firefox115', 'safari16.4'],
     sourcemap: true,
     dts: true,
+    // One file per module, so bundlers leave out of each chunk the modules it does not use, such as the readers
+    // and the container writers that only the recorder's pipeline needs.
+    unbundle: true,
     exports: { devExports: '@timecat-js/source' },
     publint: { strict: true },
     attw: { profile: 'esm-only', level: 'error' },
