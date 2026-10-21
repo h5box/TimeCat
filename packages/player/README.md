@@ -33,6 +33,8 @@ const response = await fetch('/sessions/42/live')
 player.recording = response.body!
 ```
 
+A stream is read once: the element cannot load it again when it is moved, and dispatches `error` then.
+
 Without a bundler, load the element as one classic script: `@timecat-js/player/standalone`
 (`dist/timecat-player.js`), which has all it needs.
 

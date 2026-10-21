@@ -289,8 +289,8 @@ packages/
   plugin-console/  控制台输出、未捕获的错误和未处理的 Promise 拒绝
   plugin-network/  fetch / XHR / sendBeacon 请求和资源加载的元数据
   plugin-perf/     Web Vitals、布局偏移、长动画帧
-  plugin-canvas/   Canvas / WebGL 视频轨（WebCodecs，M3）
-  plugin-media/    麦克风旁白、<video> 状态与画面（M3）
+  plugin-canvas/   Canvas / WebGL 的画面录成视频轨（WebCodecs，MediaRecorder 兜底）
+  plugin-media/    <audio> / <video> 的播放状态与画面、麦克风旁白
   player-core/     无头回放引擎：时间轴、seek 索引、DOM 物化、沙箱
   player/          <timecat-player>（Lit），导出为单个 HTML 文件
   insight/         语义转写 + AI 分析（在服务端运行，M4）
@@ -340,7 +340,7 @@ apps/
 | M0 地基（已完成） | monorepo、工具链、三浏览器 CI、基准框架（含 rrweb 对标）、TCR 格式规范 v0；换掉旧 `.gitignore`（旧规则忽略了 `docs`、`examples`、`test*` 这些常用名字）。产出见 [`packages/protocol`](../packages/protocol)、[`apps/bench`](../apps/bench)（含 rrweb 基线）、[RFC 0002](./0002-tcr-format.md) |
 | M1 录制核心 + 最小回放（已完成） | 分片快照、按任务合并且每帧都写的增量（第 3.3 节）、输入（含脱敏）/ 指针 / 滚动 / 视口 / 导航；Worker 管线（编码、压缩、OPFS、导出）；player-core 的播放和 seek；保真测试套件。产出见 [`packages/recorder`](../packages/recorder)、[`packages/player-core`](../packages/player-core)、[保真测试](../packages/recorder/test/fidelity)，以及 [`apps/bench`](../apps/bench) 里和 rrweb 的对比与 seek 基准，实测结果见第 8 节 |
 | M2 平台覆盖与回放体验（已完成） | Shadow DOM、Constructable Stylesheets / CSSOM、iframe、字体和 `blob:` 资源；`<timecat-player>` UI；导出为单个 HTML 文件；console、network、perf 插件；seek 时把页面改成关键帧的样子，而不是整棵重建（第 8 节）。产出见 [`packages/player`](../packages/player)、[`packages/plugin-console`](../packages/plugin-console)、[`packages/plugin-network`](../packages/plugin-network)、[`packages/plugin-perf`](../packages/plugin-perf)，以及 [`packages/recorder`](../packages/recorder) 和 [`packages/player-core`](../packages/player-core) 里新增的平台覆盖和[保真测试](../packages/recorder/test/fidelity) |
-| M3 媒体与实时 | Canvas / 视频轨（WebCodecs）、麦克风旁白、实时模式 |
+| M3 媒体与实时（已完成） | Canvas / 视频轨（WebCodecs，MediaRecorder 兜底）、`<video>` 的播放状态和可选的画面、麦克风旁白；实时模式：录制器用 `onData` 每隔 `latency` 毫秒流式输出，带同步点，回放端从流的最新位置实时播放；`<timecat-player>` 的实时标记、音量和静音。产出见 [`packages/plugin-canvas`](../packages/plugin-canvas)、[`packages/plugin-media`](../packages/plugin-media)，以及 [`packages/protocol`](../packages/protocol)（媒体 chunk、同步点，RFC 0002）、[`packages/recorder`](../packages/recorder)、[`packages/player-core`](../packages/player-core) 和 [`packages/player`](../packages/player) 里新增的媒体与实时功能 |
 | M4 服务端与 AI（暂缓） | 接入服务、存储、控制台；语义转写、摘要、批量分析；MCP Server；生成 Playwright 用例。按第 10 节的决定，不在当前范围内 |
 
 ## 10. 决策记录（2026-10-20）

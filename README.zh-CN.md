@@ -4,8 +4,8 @@
 
 <p align="center"><a href="./README.md">English</a> | 中文</p>
 
-> **正在重写。** TimeCat 正在从零重建。录制器、回放引擎和播放器（M1、M2）已经完成，但还没有发布，录制格式也可能调整；
-> 下一步是 Canvas、媒体和实时模式。架构和路线图见 [RFC 0001](./rfcs/0001-timecat-next.md)。
+> **正在重写。** TimeCat 正在从零重建。录制器、回放引擎、播放器、媒体和实时回放（M1 到 M3）已经完成，但还没有发布，
+> 录制格式也可能调整。架构和路线图见 [RFC 0001](./rfcs/0001-timecat-next.md)。
 
 TimeCat 录制网页里发生的一切，包括 DOM 变化、输入、滚动和指针移动，并能像视频一样回放出来，但录下的并不是真正的视频画面。
 
@@ -21,15 +21,17 @@ TimeCat 录制网页里发生的一切，包括 DOM 变化、输入、滚动和�
 
 | 包 | 状态 |
 |---|---|
-| [`@timecat-js/protocol`](./packages/protocol) | v0 草案：二进制基本类型、字符串表、chunk 容器、事件负载 |
-| [`@timecat-js/recorder`](./packages/recorder) | M1：分片快照、合并后的增量变更、输入（脱敏）、指针、滚动、视口和导航；压缩和存储在 Worker 中完成。M2：Shadow DOM、同源 iframe、CSSOM 变更、adopted 样式表、字体和 `blob:` 内容；插件和应用自己的事件 |
-| [`@timecat-js/player-core`](./packages/player-core) | M1：不带界面的回放，在 Worker 里建索引，通过关键帧 seek，在沙箱中回放。M2：回放录制器在 M2 新增的内容；seek 时只改和当前画面不同的部分 |
+| [`@timecat-js/protocol`](./packages/protocol) | v0 草案：二进制基本类型、字符串表、chunk 容器、事件负载、媒体 chunk、实时流的同步点 |
+| [`@timecat-js/recorder`](./packages/recorder) | M1：分片快照、合并后的增量变更、输入（脱敏）、指针、滚动、视口和导航；压缩和存储在 Worker 中完成。M2：Shadow DOM、同源 iframe、CSSOM 变更、adopted 样式表、字体和 `blob:` 内容；插件和应用自己的事件。M3：插件的媒体轨；用 `onData` 流式输出，供实时回放 |
+| [`@timecat-js/player-core`](./packages/player-core) | M1：不带界面的回放，在 Worker 里建索引，通过关键帧 seek，在沙箱中回放。M2：回放录制器在 M2 新增的内容；seek 时只改和当前画面不同的部分。M3：从流实时回放；Canvas 和视频的画面、媒体元素和旁白随回放播放 |
 | [`@timecat-js/plugin-console`](./packages/plugin-console) | M2：控制台消息、未捕获的错误和未处理的 Promise 拒绝 |
 | [`@timecat-js/plugin-network`](./packages/plugin-network) | M2：`fetch`、XHR 和 `sendBeacon` 发出的请求，以及页面加载的资源 |
 | [`@timecat-js/plugin-perf`](./packages/plugin-perf) | M2：LCP、CLS、INP、FCP、TTFB 和长动画帧 |
-| [`@timecat-js/player`](./packages/player) | M2：`<timecat-player>` 组件，带播放控制、标出错误的时间轴和页面之外录到的事件面板；可把录像导出为单个 HTML 文件 |
+| [`@timecat-js/plugin-canvas`](./packages/plugin-canvas) | M3：2D 和 WebGL Canvas 的画面，用 WebCodecs 录成视频，没有 WebCodecs 时用 `MediaRecorder` |
+| [`@timecat-js/plugin-media`](./packages/plugin-media) | M3：`<audio>` 和 `<video>` 的播放状态，可选录下视频画面，以及麦克风旁白 |
+| [`@timecat-js/player`](./packages/player) | M2：`<timecat-player>` 组件，带播放控制、标出错误的时间轴和页面之外录到的事件面板；可把录像导出为单个 HTML 文件。M3：实时回放、音量和静音 |
 
-[`apps/bench`](./apps/bench) 在同一批夹具页面上测量 TimeCat 和 rrweb，并测量一小时录像里的 seek 耗时。
+[`apps/bench`](./apps/bench) 在同一批夹具页面上（包括一个 Canvas 动画）测量 TimeCat 和 rrweb，并测量一小时录像里的 seek 耗时。
 
 ## 开发
 
