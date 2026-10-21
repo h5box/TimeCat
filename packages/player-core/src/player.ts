@@ -1,5 +1,6 @@
-import { decodeEvent, EventType, gunzip } from '@timecat-js/protocol'
-import type { SnapshotEvent, ViewportEvent } from '@timecat-js/protocol'
+import { decodeEvent, EventType, gunzip, readEventFrames } from '@timecat-js/protocol'
+import type { SnapshotEvent, TcrEvent, ViewportEvent } from '@timecat-js/protocol'
+import { Assets } from './assets.ts'
 import { Materializer } from './materializer.ts'
 import { pointerAt } from './pointer.ts'
 import { Stage } from './stage.ts'
@@ -70,6 +71,13 @@ export interface Player extends EventTarget {
 const DEFAULT_KEYFRAME_INTERVAL = 2000
 /** Decompressed keyframes kept, for seeking back and forth around them. */
 const CACHED_SNAPSHOTS = 2
+const EMPTY = new Uint8Array(0)
+
+/** A keyframe's snapshot and style events, decompressed. */
+interface KeyframeState {
+    snapshot: SnapshotEvent
+    styles: Uint8Array
+}
 
 /** Loads a recording, made of one or more segments of a session, and shows its start in `options.container`. */
 export async function createPlayer(
@@ -106,13 +114,14 @@ class ReplayPlayer extends EventTarget implements Player {
     readonly #timeline: Timeline
     readonly #stage: Stage
     readonly #materializer: Materializer
+    readonly #assets: Assets
     readonly #document: Document
     readonly #onError: (error: unknown) => void
     readonly #start: number
     readonly #end: number
     /** Stands for the viewport before the first one recorded. */
     readonly #firstViewport: ViewportEvent | undefined
-    readonly #snapshots = new Map<Keyframe, Uint8Array>()
+    readonly #snapshots = new Map<Keyframe, { snapshot: Uint8Array; styles: Uint8Array }>()
     /** Keyframes that failed to decompress, which seeking does without. */
     readonly #broken = new Set<Keyframe>()
     /** Events applied: the document shows the state after the first `#position` events, when `#valid`. */
@@ -135,7 +144,8 @@ class ReplayPlayer extends EventTarget implements Player {
         this.#timeline = timeline
         this.#stage = stage
         this.#document = stage.document
-        this.#materializer = new Materializer(this.#document)
+        this.#assets = new Assets(readEvents(timeline.index.statics))
+        this.#materializer = new Materializer(this.#document, this.#assets)
         this.#onError = onError
         this.#start = timeline.index.start
         this.#end = Math.max(timeline.index.end, this.#start)
@@ -233,6 +243,7 @@ class ReplayPlayer extends EventTarget implements Player {
         this.#stop()
         cancelAnimationFrame(this.#retry)
         this.#stage.destroy()
+        this.#assets.revoke()
         this.#snapshots.clear()
     }
 
@@ -309,12 +320,12 @@ class ReplayPlayer extends EventTarget implements Player {
             if (keyframe === undefined) {
                 this.#clear()
             } else {
-                const snapshot = this.#snapshotOf(keyframe)
-                if (snapshot === undefined) {
+                const state = this.#stateOf(keyframe)
+                if (state === undefined) {
                     // The time may have moved on meanwhile, so the next render decides afresh.
                     return this.#decompress(keyframe).then(() => this.#render())
                 }
-                this.#restore(keyframe, snapshot)
+                this.#restore(keyframe, state)
             }
         }
         this.#advance(target)
@@ -322,9 +333,10 @@ class ReplayPlayer extends EventTarget implements Player {
         return undefined
     }
 
-    /** The snapshot a keyframe starts from, or `undefined` while it is still compressed. */
-    #snapshotOf(keyframe: Keyframe): SnapshotEvent | undefined {
+    /** The state a keyframe starts from, or `undefined` while it is still compressed. */
+    #stateOf(keyframe: Keyframe): KeyframeState | undefined {
         let event
+        let styles: Uint8Array = EMPTY
         if (keyframe.recorded) {
             event = this.#timeline.event(keyframe.index - 1)
         } else {
@@ -332,19 +344,23 @@ class ReplayPlayer extends EventTarget implements Player {
             if (bytes === undefined) {
                 return undefined
             }
-            event = decodeEvent(EventType.Snapshot, bytes, { next: 0 })
+            event = decodeEvent(EventType.Snapshot, bytes.snapshot, { next: 0 })
+            styles = bytes.styles
         }
         if (event?.type !== EventType.Snapshot) {
             throw new Error(`keyframe ${keyframe.index} has no snapshot`)
         }
-        return event
+        return { snapshot: event, styles }
     }
 
     async #decompress(keyframe: Keyframe): Promise<void> {
         try {
-            const bytes = await gunzip(keyframe.snapshot)
+            const [snapshot, styles] = await Promise.all([
+                gunzip(keyframe.snapshot),
+                keyframe.styles.length === 0 ? EMPTY : gunzip(keyframe.styles)
+            ])
             const snapshots = this.#snapshots
-            snapshots.set(keyframe, bytes)
+            snapshots.set(keyframe, { snapshot, styles })
             for (const old of snapshots.keys()) {
                 if (snapshots.size <= CACHED_SNAPSHOTS) {
                     break
@@ -357,10 +373,13 @@ class ReplayPlayer extends EventTarget implements Player {
         }
     }
 
-    #restore(keyframe: Keyframe, snapshot: SnapshotEvent): void {
+    #restore(keyframe: Keyframe, { snapshot, styles }: KeyframeState): void {
         const materializer = this.#materializer
         this.#valid = false
         materializer.build(snapshot)
+        for (const event of readEvents(styles)) {
+            materializer.apply(event)
+        }
         for (const [type, body] of [
             [EventType.Input, keyframe.input],
             [EventType.Scroll, keyframe.scroll]
@@ -419,6 +438,18 @@ class ReplayPlayer extends EventTarget implements Player {
             })
         }
     }
+}
+
+/** Decodes the events of an events chunk payload whose events add no nodes, such as the styles of a keyframe. */
+function readEvents(payload: Uint8Array): TcrEvent[] {
+    const events: TcrEvent[] = []
+    for (const { type, body } of readEventFrames(payload, 0)) {
+        const event = decodeEvent(type, body, { next: 0 })
+        if (event !== undefined) {
+            events.push(event)
+        }
+    }
+    return events
 }
 
 function checkSpeed(speed: number): number {

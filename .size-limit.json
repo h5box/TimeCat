@@ -26,6 +26,6 @@
         "path": "packages/player-core/dist/index.js",
         "import": "{ createPlayer }",
         "gzip": true,
-        "limit": "22 kB"
+        "limit": "26 kB"
     }
 ]

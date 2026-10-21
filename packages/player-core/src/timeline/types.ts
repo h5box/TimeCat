@@ -15,6 +15,11 @@ export interface TimelineIndex {
     events: EventTable
     keyframes: Keyframe[]
     pointer: PointerTrail
+    /**
+     * FontFace and Asset events, as an events chunk payload. They hold for the whole recording, whatever their
+     * time, so `events` leaves them out.
+     */
+    statics: Uint8Array<ArrayBuffer>
     /** Problems the recording was read despite, such as a truncated last chunk. */
     warnings: string[]
 }
@@ -52,6 +57,11 @@ export interface Keyframe {
     input: Uint8Array<ArrayBuffer>
     /** Scroll event body with the offset of every scrolled node, or empty. */
     scroll: Uint8Array<ArrayBuffer>
+    /**
+     * StyleSheet and AdoptedStyleSheets events that bring the sheets of the snapshot to their state, as an events
+     * chunk payload, gzip-compressed; or empty. Always empty for recorded snapshots: the events after them do that.
+     */
+    styles: Uint8Array<ArrayBuffer>
 }
 
 /** Pointer positions and button presses, in time order. */
@@ -92,8 +102,9 @@ export function transferables(index: TimelineIndex): ArrayBuffer[] {
         pointer.buttons.xs,
         pointer.buttons.ys
     ].map(array => array.buffer)
+    buffers.push(index.statics.buffer)
     for (const keyframe of index.keyframes) {
-        buffers.push(keyframe.snapshot.buffer, keyframe.input.buffer, keyframe.scroll.buffer)
+        buffers.push(keyframe.snapshot.buffer, keyframe.input.buffer, keyframe.scroll.buffer, keyframe.styles.buffer)
     }
     // A buffer can be listed only once.
     return [...new Set(buffers)]

@@ -62,22 +62,36 @@ whichever is later. Pointer movement is kept apart, as columns the cursor is rea
 
 **Keyframes.** While indexing, the worker applies the events to a plain-data model of the document. Once the events
 since the last keyframe take enough work, it writes the model's state as a keyframe: a compressed snapshot that
-keeps the recording's node ids, with form values and scroll positions on top. Recorded snapshots are keyframes
-already.
+keeps the recording's node ids, with form values, scroll positions and the rules that changed through the CSSOM on
+top. Recorded snapshots are keyframes already. The model follows the DOM's rules, refusals included, so a keyframe
+shows what applying the events before it shows: a second shadow root on a host is left out, and a `<style>` whose
+children or type change parses its text anew, losing what the CSSOM changed.
 
 **Seeking.** A seek goes forward through the events when that is cheaper than rebuilding, and otherwise builds the
 DOM from the last keyframe before the target and applies the events after it, so its cost is bounded by the keyframe
 interval rather than by the length of the recording.
 
+**Shadow trees and frames.** Shadow roots are attached again, open whatever their recorded mode. The documents of
+frames are built from the recording into the frames' own blank documents, in the recorded mode and with the frame's
+recorded URL for relative URLs; a frame whose document the recording does not have shows a blank page.
+
+**Style sheets.** Rules that script changed through the CSSOM are changed the same way in the replay. A rule this
+browser does not parse is replaced by one that never applies, so the indexes of later changes still match. Sheets
+made with `new CSSStyleSheet()` are made again for each replayed document that adopts them, since a document can
+adopt only the sheets of its own window.
+
 **Safety.** The replay is built in an `<iframe sandbox="allow-same-origin">`: without `allow-scripts`, nothing
-recorded runs, whatever it contains. On top of that, the replayed document has a content security policy that allows
-no scripts, plugins, frames, workers or form submissions, and recorded attributes are filtered: event handlers,
-`javascript:` URLs, `autofocus`, `autoplay`, refreshes and other `http-equiv` directives, referrer policies and the
-sources of frames, objects and embeds are left out. Scripts are kept, with a type no browser runs. The frame is
-`inert` and covered by a shield, so the viewer's clicks and keys never reach the recorded page.
+recorded runs, whatever it contains. Frames in it inherit the sandbox. On top of that, the replayed documents have a
+content security policy that allows no scripts, plugins, frames, workers or form submissions, and recorded
+attributes are filtered: event handlers, `javascript:` URLs, `autofocus`, `autoplay`, refreshes and other
+`http-equiv` directives, referrer policies, the sources of frames, objects and embeds, and the `sandbox` and `csp`
+of frames are left out. Scripts are kept, with a type no browser runs. The frame is `inert` and covered by a shield,
+so the viewer's clicks and keys never reach the recorded page.
 
 **URLs.** Relative URLs resolve against the recorded page's URL, or its first `<base>` element, through a `<base>`
-element the player keeps first in the head. Images, styles and fonts load from where the recorded page had them.
+element the player keeps first in the head. Images, styles and fonts load from where the recorded page had them,
+except what lived only in the recorded page: the content of its `blob:` URLs comes from the recording, served from
+`blob:` URLs the player makes, and the font faces its scripts added are added to every replayed document.
 
 ## Content security policy
 
@@ -87,7 +101,8 @@ on the main thread.
 
 The replay frame inherits the policy of the page it is in. For the recorded page to look right, that policy has to
 allow its styles, inline ones included (`style-src 'unsafe-inline'`, or `style-src-elem` and `style-src-attr`), and
-the images and fonts it loads. The player's own styles need nothing: they are constructed style sheets.
+the images and fonts it loads, `blob:` ones included where the recording carries `blob:` content. The player's own
+styles need nothing: they are constructed style sheets.
 
 ## Browser support
 
@@ -95,7 +110,8 @@ The last two versions of Chrome, Edge, Firefox and Safari.
 
 ## Limitations
 
-- Frames inside the recorded page are shown empty, and canvas, video and audio content is not replayed yet (M2).
+- Frames the recorder could not read, such as cross-origin ones, show a blank page, and canvas, video and audio
+  content is not replayed.
 - Resources load at replay time: whatever has changed or gone since, or does not allow cross-origin use (fonts
   without CORS headers, for example), shows differently.
 - States the recording does not capture are not shown: `:hover` and focus styles, open dialogs and popovers in the
@@ -104,6 +120,8 @@ The last two versions of Chrome, Edge, Firefox and Safari.
   URL the page had when the element was added.
 - Recorded attributes with names the DOM does not accept are left out, and elements with such names are replaced
   by `<timecat-invalid>` so their content still shows.
+- Firefox parses the text of a `<style>` anew when its `media` or `title` changes, losing what the CSSOM changed;
+  keyframes keep those changes, so after a seek such a sheet may show them.
 
 ## License
 

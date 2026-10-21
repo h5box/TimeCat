@@ -1,5 +1,6 @@
 import {
     ByteReader,
+    ByteWriter,
     ChunkFlag,
     ChunkKind,
     decodeEvent,
@@ -9,7 +10,8 @@ import {
     readChunk,
     readEventFrames,
     readFileHeader,
-    Track
+    Track,
+    writeEventFrame
 } from '@timecat-js/protocol'
 import type { Chunk, FileHeader, IdCounter, TcrEvent } from '@timecat-js/protocol'
 import type { Keyframe, PointerTrail, TimelineIndex } from './types.ts'
@@ -39,6 +41,9 @@ interface Frame {
 /** Marks DOM events that could not be read: later ones depend on them, until the next snapshot. */
 const GAP = 0
 const EMPTY = new Uint8Array(0)
+
+/** Events that hold for the whole recording, whatever their time. */
+const STATIC_TYPES: ReadonlySet<number> = new Set([EventType.FontFace, EventType.Asset])
 
 /**
  * Reads the segments of one session into a timeline index. Damage that a recording can survive, such as a
@@ -82,6 +87,7 @@ export async function buildIndex(sources: readonly SegmentSource[], options: Ind
         events: index.events,
         keyframes: await index.keyframes,
         pointer: index.pointer,
+        statics: index.statics,
         warnings
     }
 }
@@ -195,6 +201,7 @@ function indexFrames(frames: readonly Frame[], options: IndexOptions, warnings: 
     const compressions: Promise<void>[] = []
     const ids: IdCounter = { next: 1 }
     const pointer = new PointerColumns()
+    const statics = new ByteWriter()
     let viewport: Keyframe['viewport']
     /** DOM events cannot be applied until the next snapshot, because an earlier one is missing. */
     let broken = false
@@ -223,6 +230,10 @@ function indexFrames(frames: readonly Frame[], options: IndexOptions, warnings: 
             end = Math.max(end, pointer.add(event, time))
             continue
         }
+        if (STATIC_TYPES.has(type)) {
+            writeEventFrame(statics, type, 0, body)
+            continue
+        }
         if (event.type === EventType.Snapshot) {
             broken = false
         } else if (broken && event.type === EventType.Mutations) {
@@ -243,7 +254,8 @@ function indexFrames(frames: readonly Frame[], options: IndexOptions, warnings: 
                 recorded: true,
                 snapshot: EMPTY,
                 input: EMPTY,
-                scroll: EMPTY
+                scroll: EMPTY,
+                styles: EMPTY
             })
             continue
         }
@@ -261,20 +273,22 @@ function indexFrames(frames: readonly Frame[], options: IndexOptions, warnings: 
         const keyframe: Keyframe = {
             index: columns.count,
             time,
-            cost: document.size,
+            cost: document.size + state.rules,
             viewport,
             recorded: false,
             snapshot: EMPTY,
             input: state.input,
-            scroll: state.scroll
+            scroll: state.scroll,
+            styles: EMPTY
         }
         keyframes.push(keyframe)
-        compressions.push(compress(keyframe, state.snapshot))
+        compressions.push(compress(keyframe, state.snapshot, state.styles))
     }
     return {
         events: columns.finish(),
         keyframes: Promise.all(compressions).then(() => keyframes),
         pointer: pointer.finish(),
+        statics: statics.finish(),
         end
     }
 }
@@ -334,8 +348,13 @@ class PointerColumns {
     }
 }
 
-async function compress(keyframe: Keyframe, snapshot: Uint8Array): Promise<void> {
-    keyframe.snapshot = await gzip(snapshot)
+async function compress(keyframe: Keyframe, snapshot: Uint8Array, styles: Uint8Array): Promise<void> {
+    const [compressed, compressedStyles] = await Promise.all([
+        gzip(snapshot),
+        styles.length === 0 ? EMPTY : gzip(styles)
+    ])
+    keyframe.snapshot = compressed
+    keyframe.styles = compressedStyles
 }
 
 /** Indexes of `times` in ascending, stable order. */

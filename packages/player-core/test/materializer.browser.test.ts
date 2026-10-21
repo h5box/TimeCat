@@ -1,11 +1,22 @@
-import { decodeEvent, EventType, InputKind, Namespace } from '@timecat-js/protocol'
+import {
+    decodeEvent,
+    EventType,
+    InputKind,
+    Namespace,
+    readEventFrames,
+    SheetChangeKind,
+    SheetOwner
+} from '@timecat-js/protocol'
+import type { SheetChange, TcrEvent } from '@timecat-js/protocol'
 import * as fc from 'fast-check'
 import { afterEach, describe, expect, it } from 'vitest'
-import { isHtml, isInput, isSelect, isTextArea } from '../src/dom.ts'
+import { Assets } from '../src/assets.ts'
+import { isDocument, isFrame, isHtml, isInput, isSelect, isShadowRoot, isStyle, isTextArea } from '../src/dom.ts'
 import { Materializer, PLAYER_ATTRIBUTE } from '../src/materializer.ts'
 import { Stage } from '../src/stage.ts'
 import { VirtualDocument } from '../src/timeline/virtual.ts'
-import { operation, recordingOf } from './operations.ts'
+import type { EncodedState } from '../src/timeline/virtual.ts'
+import { operations, recordingOf } from './operations.ts'
 import { build, describeDom, describeTree, isElement, mutations, pageOf, snapshotOf } from './recording.ts'
 import type { Spec } from './recording.ts'
 
@@ -25,14 +36,68 @@ afterEach(() => {
 })
 
 /** A materializer for the document of a new stage. */
-async function setUp(): Promise<{ document: Document; materializer: Materializer }> {
+async function setUp(assets?: Assets): Promise<{ document: Document; materializer: Materializer }> {
     const container = document.createElement('div')
     container.style.cssText = 'width: 400px; height: 300px'
     document.body.append(container)
     containers.push(container)
     const stage = await Stage.create(container)
     stages.push(stage)
-    return { document: stage.document, materializer: new Materializer(stage.document) }
+    return { document: stage.document, materializer: new Materializer(stage.document, assets) }
+}
+
+/** Applies an event the way the player does. */
+function play(materializer: Materializer, event: TcrEvent): void {
+    if (event.type === EventType.Snapshot) {
+        materializer.build(event)
+    } else {
+        materializer.apply(event)
+    }
+}
+
+/** Builds a keyframe's state the way the player restores it. */
+function restore(materializer: Materializer, state: EncodedState): void {
+    const ids = { next: 0 }
+    const snapshot = decodeEvent(EventType.Snapshot, state.snapshot, ids)
+    if (snapshot?.type !== EventType.Snapshot) {
+        throw new Error('a keyframe without a snapshot')
+    }
+    materializer.build(snapshot)
+    for (const { type, body } of readEventFrames(state.styles, 0)) {
+        materializer.apply(decodeEvent(type, body, ids)!)
+    }
+    if (state.input.length > 0) {
+        materializer.apply(decodeEvent(EventType.Input, state.input, ids)!)
+    }
+}
+
+/** Shows the documents the materializer built in frames, and not the blank ones of frames without one. */
+function builtIn(materializer: Materializer): (element: Element) => Document | undefined {
+    return element => {
+        const document = isFrame(element) ? element.contentDocument : null
+        return document !== null && materializer.id(document) !== undefined ? document : undefined
+    }
+}
+
+/** Everything a replay shows, sheets and form values included. */
+function describeReplay({ document, materializer }: { document: Document; materializer: Materializer }): string {
+    return describeDom(document, { frameDocument: builtIn(materializer), state: true })
+}
+
+/** An iframe with a document that has `body` in its body. */
+function framed(body: Spec[]): Spec {
+    return {
+        tag: 'iframe',
+        children: [{ document: [{ tag: 'html', children: [{ tag: 'body', children: body }] }] }]
+    }
+}
+
+function sheetEvent(owner: SheetOwner, id: number, ...changes: SheetChange[]): TcrEvent {
+    return { type: EventType.StyleSheet, owner, id, changes }
+}
+
+function rulesOf(sheet: CSSStyleSheet | null | undefined): string[] {
+    return sheet === null || sheet === undefined ? [] : [...sheet.cssRules].map(rule => rule.cssText)
 }
 
 /** The node a recorded id stands for, checked to be of the kind expected. */
@@ -62,6 +127,22 @@ function isSelectNode(node: Node): node is HTMLSelectElement {
 
 function isScrollable(node: Node): node is HTMLElement {
     return isElement(node) && isHtml(node, 'div')
+}
+
+function isFrameNode(node: Node): node is HTMLIFrameElement | HTMLFrameElement {
+    return isElement(node) && isFrame(node)
+}
+
+function isStyleNode(node: Node): node is HTMLStyleElement | SVGStyleElement {
+    return isElement(node) && isStyle(node)
+}
+
+function isImage(node: Node): node is HTMLImageElement {
+    return isElement(node) && isHtml(node, 'img')
+}
+
+function colorOf(element: Element): string {
+    return element.ownerDocument.defaultView!.getComputedStyle(element).color
 }
 
 function option(text: string): Spec {
@@ -167,7 +248,21 @@ describe('Materializer', () => {
             [
                 { tag: 'a', attributes: ['href', ' JAVA\tSCRIPT:alert(1)', 'onclick', 'alert(1)'] },
                 { tag: 'a', attributes: ['href', 'https://example.com/ok', 'ONMOUSEOVER', 'alert(1)'] },
-                { tag: 'iframe', attributes: ['src', 'https://example.com/', 'srcdoc', '<p>', 'title', 'kept'] },
+                {
+                    tag: 'iframe',
+                    attributes: [
+                        'src',
+                        'https://example.com/',
+                        'srcdoc',
+                        '<p>',
+                        'sandbox',
+                        'allow-scripts',
+                        'csp',
+                        'script-src *',
+                        'title',
+                        'kept'
+                    ]
+                },
                 { tag: 'object', attributes: ['data', 'movie.swf', 'type', 'application/x-shockwave-flash'] },
                 { tag: 'embed', attributes: ['src', 'movie.swf'] },
                 {
@@ -382,19 +477,15 @@ describe('Materializer', () => {
     it('changes the DOM the way the virtual document models it', async () => {
         const { document, materializer } = await setUp()
         fc.assert(
-            fc.property(fc.array(operation, { minLength: 1, maxLength: 60 }), operations => {
+            fc.property(operations(60), steps => {
                 const reference = new VirtualDocument()
-                for (const { event } of recordingOf(operations)) {
+                for (const { event } of recordingOf(steps)) {
                     // The materializer first: the virtual document changes the nodes it is given.
-                    if (event.type === EventType.Snapshot) {
-                        materializer.build(event)
-                    } else {
-                        materializer.apply(event)
-                    }
+                    play(materializer, event)
                     reference.apply(event)
                 }
                 const model = modelOf(reference)
-                expect(describeDom(document)).toBe(model.tree)
+                expect(describeDom(document, { frameDocument: builtIn(materializer) })).toBe(model.tree)
                 // Values recorded for nodes that are not form controls do not show.
                 const expected: [number, string][] = []
                 const actual: [number, string][] = []
@@ -409,5 +500,301 @@ describe('Materializer', () => {
             }),
             { numRuns: 60 }
         )
+    })
+
+    it('builds from a keyframe what applying the events before it builds, style sheets included', async () => {
+        const live = await setUp()
+        const restored = await setUp()
+        fc.assert(
+            fc.property(operations(60), steps => {
+                const reference = new VirtualDocument()
+                for (const { event } of recordingOf(steps)) {
+                    play(live.materializer, event)
+                    reference.apply(event)
+                }
+                restore(restored.materializer, reference.encode(0)!)
+                expect(describeReplay(restored)).toBe(describeReplay(live))
+            }),
+            { numRuns: 60 }
+        )
+    })
+
+    it('builds shadow trees and the documents of frames, and changes them', async () => {
+        const { document, materializer } = await setUp()
+        // body 5: div 6 (#shadow-root 7 (span 8 ("shadow" 9))), iframe 10 (#document 11 (html 12 (head 13,
+        // body 14 (a 15 ("framed" 16)))))
+        const snapshot = pageOf([
+            { tag: 'div', children: [{ shadow: [{ tag: 'span', children: [{ text: 'shadow' }] }] }] },
+            {
+                tag: 'iframe',
+                children: [
+                    {
+                        document: [
+                            {
+                                tag: 'html',
+                                children: [
+                                    { tag: 'head' },
+                                    {
+                                        tag: 'body',
+                                        children: [
+                                            {
+                                                tag: 'a',
+                                                attributes: ['href', 'next.html'],
+                                                children: [{ text: 'framed' }]
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ],
+                        quirks: true
+                    }
+                ]
+            }
+        ])
+        materializer.build(snapshot)
+        const frameDocument = builtIn(materializer)
+        expect(describeDom(document, { frameDocument })).toBe(describeTree(snapshot.root))
+        const host = nodeOf(materializer, 6, isElement)
+        expect(materializer.node(7)).toBe(host.shadowRoot)
+        const iframe = nodeOf(materializer, 10, isFrameNode)
+        const inner = nodeOf(materializer, 11, isDocument)
+        expect(iframe.contentDocument).toBe(inner)
+        expect(inner.compatMode).toBe('BackCompat')
+        // URLs in the frame resolve against the frame's recorded URL, and follow it.
+        expect(nodeOf(materializer, 15, isAnchor).href).toBe('https://example.com/frame/next.html')
+        materializer.apply({ type: EventType.Navigation, id: 11, url: 'https://example.com/moved/page.html' })
+        expect(nodeOf(materializer, 15, isAnchor).href).toBe('https://example.com/moved/next.html')
+        // Into the shadow tree and the frame's document. A second shadow root, and one on an element that takes
+        // none, are left out.
+        materializer.apply(
+            mutations({
+                adds: [
+                    { parentId: 7, beforeId: 8, nodes: [build({ text: 'before ' }, { next: 17 })] },
+                    { parentId: 14, beforeId: 0, nodes: [build({ tag: 'p' }, { next: 18 })] },
+                    { parentId: 6, beforeId: 0, nodes: [build({ shadow: [{ text: 'second' }] }, { next: 19 })] },
+                    { parentId: 15, beforeId: 0, nodes: [build({ shadow: [{ text: 'none' }] }, { next: 21 })] }
+                ]
+            })
+        )
+        expect(host.shadowRoot?.textContent).toBe('before shadow')
+        expect(inner.body.lastElementChild?.localName).toBe('p')
+        expect([19, 20, 21, 22].map(id => materializer.node(id))).toEqual([undefined, undefined, undefined, undefined])
+        expect(nodeOf(materializer, 15, isElement).shadowRoot).toBeNull()
+        // A new document replaces the frame's, in the same frame.
+        const next = build(
+            { document: [{ tag: 'html', children: [{ tag: 'body', children: [{ text: 'next' }] }] }] },
+            { next: 23 }
+        )
+        materializer.apply(mutations({ adds: [{ parentId: 10, beforeId: 0, nodes: [next] }] }))
+        expect(materializer.node(11)).toBeUndefined()
+        expect(materializer.node(15)).toBeUndefined()
+        expect(materializer.node(23)).toBe(inner)
+        expect(inner.compatMode).toBe('CSS1Compat')
+        expect(describeDom(nodeOf(materializer, 10, isElement), { frameDocument })).toBe(
+            ['<iframe>', '  #document', '    <html>', '      <body>', '        "next"'].join('\n')
+        )
+        // Without its document, the frame shows the blank page of a frame that never had one.
+        materializer.apply(mutations({ removes: [23] }))
+        expect(materializer.node(23)).toBeUndefined()
+        expect(frameDocument(iframe)).toBeUndefined()
+        expect(inner.body.childNodes.length).toBe(0)
+        // Removing the host forgets its shadow tree.
+        materializer.apply(mutations({ removes: [6] }))
+        expect([6, 7, 8, 9, 17].map(id => materializer.node(id))).toEqual([
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined
+        ])
+    })
+
+    it('builds the documents of frames in frames and in shadow trees, and forgets them with their frame', async () => {
+        const { document, materializer } = await setUp()
+        // body 5: div 6 (#shadow-root 7 (iframe 8 (#document 9 (html 10 (body 11 (iframe 12 (#document 13 (html 14
+        // (body 15 ("deep" 16)))))))))
+        const snapshot = pageOf([{ tag: 'div', children: [{ shadow: [framed([framed([{ text: 'deep' }])])] }] }])
+        materializer.build(snapshot)
+        expect(describeDom(document, { frameDocument: builtIn(materializer) })).toBe(describeTree(snapshot.root))
+        const deep = nodeOf(materializer, 13, isDocument)
+        expect(deep.body.textContent).toBe('deep')
+        expect(deep.querySelector('base')?.getAttribute('href')).toBe('https://example.com/frame/page.html')
+        materializer.apply(mutations({ removes: [8] }))
+        expect([8, 9, 12, 13, 16].map(id => materializer.node(id))).toEqual([
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined
+        ])
+        // A document for an element that shows none is left out.
+        const stray = build({ document: [{ tag: 'html' }] }, { next: 17 })
+        materializer.apply(mutations({ adds: [{ parentId: 6, beforeId: 0, nodes: [stray] }] }))
+        expect(materializer.node(17)).toBeUndefined()
+    })
+
+    it('changes the rules of style sheets, with stand-ins for those this browser does not take', async () => {
+        const { materializer } = await setUp()
+        // head 4: style 5 ("p { color: red; }" 6), style 7 ('@import url("data:text/css,");' 8); body 9
+        materializer.build(
+            pageOf([], {
+                head: [
+                    { tag: 'style', children: [{ text: 'p { color: red; }' }] },
+                    { tag: 'style', children: [{ text: '@import url("data:text/css,");' }] }
+                ]
+            })
+        )
+        const style = nodeOf(materializer, 5, isStyleNode)
+        materializer.apply(
+            sheetEvent(
+                SheetOwner.Node,
+                5,
+                { kind: SheetChangeKind.Insert, index: 9, rule: 'div { margin: 1px; }' },
+                { kind: SheetChangeKind.Insert, index: 0, rule: 'not a rule' },
+                { kind: SheetChangeKind.Delete, index: 7 }
+            )
+        )
+        expect(rulesOf(style.sheet)).toEqual(['@media not all {\n}', 'p { color: red; }', 'div { margin: 1px; }'])
+        // An `@import` rule goes first, or not at all.
+        materializer.apply(
+            sheetEvent(SheetOwner.Node, 5, {
+                kind: SheetChangeKind.Replace,
+                rules: ['a { color: blue; }', '@import url("data:text/css,");']
+            })
+        )
+        expect(rulesOf(style.sheet)).toEqual(['a { color: blue; }', '@media not all {\n}'])
+        // Nothing but a layer statement goes before one.
+        const imports = nodeOf(materializer, 7, isStyleNode)
+        materializer.apply(
+            sheetEvent(SheetOwner.Node, 7, { kind: SheetChangeKind.Insert, index: 0, rule: 'p { color: red; }' })
+        )
+        expect(rulesOf(imports.sheet)).toEqual(['@layer timecat-inert;', '@import url("data:text/css,");'])
+        // New text undoes what the CSSOM changed; elements that are no `<style>` have no sheet to change.
+        materializer.apply(mutations({ texts: [{ id: 6, data: 'b { color: green; }' }] }))
+        expect(rulesOf(style.sheet)).toEqual(['b { color: green; }'])
+        materializer.apply(sheetEvent(SheetOwner.Node, 9, { kind: SheetChangeKind.Delete, index: 0 }))
+        materializer.apply(sheetEvent(SheetOwner.Node, 99, { kind: SheetChangeKind.Delete, index: 0 }))
+    })
+
+    it('adopts constructed sheets in documents, shadow roots and frames, a copy for each document', async () => {
+        const { document, materializer } = await setUp()
+        // body 5: p 6, div 7 (#shadow-root 8 (p 9)), iframe 10 (#document 11 (html 12 (body 13 (p 14))))
+        materializer.build(
+            pageOf([
+                { tag: 'p' },
+                { tag: 'div', children: [{ shadow: [{ tag: 'p' }] }] },
+                {
+                    tag: 'iframe',
+                    children: [{ document: [{ tag: 'html', children: [{ tag: 'body', children: [{ tag: 'p' }] }] }] }]
+                }
+            ])
+        )
+        const paragraphs = [6, 9, 14].map(id => nodeOf(materializer, id, isElement))
+        const red = 'rgb(255, 0, 0)'
+        const blue = 'rgb(0, 0, 255)'
+        materializer.apply(
+            sheetEvent(SheetOwner.Constructed, 1, { kind: SheetChangeKind.Replace, rules: [`p { color: ${red}; }`] })
+        )
+        for (const id of [1, 8, 11]) {
+            materializer.apply({ type: EventType.AdoptedStyleSheets, id, sheets: [1, 2] })
+        }
+        expect(paragraphs.map(colorOf)).toEqual([red, red, red])
+        const shadow = nodeOf(materializer, 8, isShadowRoot)
+        const inner = nodeOf(materializer, 11, isDocument)
+        // Sheet 2 did not exist yet, so it stays out.
+        expect(document.adoptedStyleSheets.length).toBe(1)
+        expect(shadow.adoptedStyleSheets[0]).toBe(document.adoptedStyleSheets[0])
+        expect(inner.adoptedStyleSheets[0]).not.toBe(document.adoptedStyleSheets[0])
+        // Changes reach every copy.
+        materializer.apply(
+            sheetEvent(SheetOwner.Constructed, 1, {
+                kind: SheetChangeKind.Insert,
+                index: 1,
+                rule: `p { color: ${blue}; }`
+            })
+        )
+        materializer.apply(
+            sheetEvent(SheetOwner.Constructed, 2, { kind: SheetChangeKind.Replace, rules: ['p { color: green; }'] })
+        )
+        expect(paragraphs.map(colorOf)).toEqual([blue, blue, blue])
+        materializer.apply({ type: EventType.AdoptedStyleSheets, id: 8, sheets: [2, 1] })
+        expect(rulesOf(shadow.adoptedStyleSheets[0])).toEqual(['p { color: green; }'])
+        expect(shadow.adoptedStyleSheets[1]).toBe(document.adoptedStyleSheets[0])
+        // A snapshot drops every sheet.
+        materializer.build(pageOf([{ tag: 'p' }]))
+        expect(document.adoptedStyleSheets.length).toBe(0)
+        materializer.apply({ type: EventType.AdoptedStyleSheets, id: 1, sheets: [1] })
+        expect(document.adoptedStyleSheets.length).toBe(0)
+    })
+
+    it('shows blob content from the recording at URLs of its own, and adds the recorded fonts', async () => {
+        const image = 'blob:https://example.com/0b6f-image'
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"></svg>'
+        const assets = new Assets([
+            { type: EventType.Asset, url: image, mimeType: 'image/svg+xml', data: new TextEncoder().encode(svg) },
+            { type: EventType.Asset, url: image, mimeType: 'text/plain', data: new Uint8Array([1]) },
+            { type: EventType.FontFace, family: 'Recorded', source: `url("${image}")`, descriptors: ['weight', '700'] },
+            { type: EventType.FontFace, family: 'Bytes', source: new Uint8Array([0, 1, 2]), descriptors: [] }
+        ])
+        const { document, materializer } = await setUp(assets)
+        // head 4: style 5 (text 6); body 7: img 8, iframe 9 (#document 10 (html 11 (body 12 (img 13))))
+        materializer.build(
+            pageOf(
+                [
+                    { tag: 'img', attributes: ['src', image, 'srcset', `${image} 2x, other.png 3x`] },
+                    {
+                        tag: 'iframe',
+                        children: [
+                            {
+                                document: [
+                                    {
+                                        tag: 'html',
+                                        children: [
+                                            { tag: 'body', children: [{ tag: 'img', attributes: ['src', image] }] }
+                                        ]
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+                { head: [{ tag: 'style', children: [{ text: `body { background: url(${image}) }` }] }] }
+            )
+        )
+        const local = nodeOf(materializer, 8, isImage).getAttribute('src')!
+        expect(local).toMatch(new RegExp(`^blob:${location.origin}/`))
+        expect(nodeOf(materializer, 8, isImage).getAttribute('srcset')).toBe(`${local} 2x, other.png 3x`)
+        expect(nodeOf(materializer, 13, isImage).getAttribute('src')).toBe(local)
+        expect(document.querySelector('style')?.textContent).toBe(`body { background: url(${local}) }`)
+        // The first copy of a URL counts.
+        const framedImage = nodeOf(materializer, 13, isImage)
+        await framedImage.decode()
+        expect(framedImage.naturalWidth).toBe(20)
+        // In attributes, text and rules that change later too.
+        materializer.apply(mutations({ attributes: [{ id: 8, name: 'src', value: `${image}#again` }] }))
+        expect(nodeOf(materializer, 8, isImage).getAttribute('src')).toBe(`${local}#again`)
+        materializer.apply(
+            sheetEvent(SheetOwner.Node, 5, {
+                kind: SheetChangeKind.Insert,
+                index: 0,
+                rule: `p { background: url("${image}"); }`
+            })
+        )
+        expect(rulesOf(nodeOf(materializer, 5, isStyleNode).sheet)[0]).toBe(`p { background: url("${local}"); }`)
+        // Every document gets the fonts, once.
+        const inner = nodeOf(materializer, 10, isDocument)
+        for (const fonts of [document.fonts, inner.fonts]) {
+            const faces = [...fonts].filter(face => face.family === 'Recorded' || face.family === 'Bytes')
+            expect(faces.map(face => [face.family, face.weight])).toEqual([
+                ['Recorded', '700'],
+                ['Bytes', 'normal']
+            ])
+        }
+        const size = document.fonts.size
+        materializer.build(pageOf([]))
+        expect(document.fonts.size).toBe(size)
+        assets.revoke()
+        await expect(fetch(local).catch((error: unknown) => error)).resolves.toBeInstanceOf(TypeError)
     })
 })

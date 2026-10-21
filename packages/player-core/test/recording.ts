@@ -12,11 +12,17 @@ import {
     writeFileHeader
 } from '@timecat-js/protocol'
 import type { DocumentNode, SegmentInfo, SerializedNode, SnapshotEvent, TcrEvent } from '@timecat-js/protocol'
+import { isDocument, isInput, isShadowRoot, isStyle, isTextArea } from '../src/dom.ts'
 
-/** Test-side description of a node; `build` numbers it the way implicit ids are assigned. */
+/**
+ * Test-side description of a node; `build` numbers it the way implicit ids are assigned. A shadow root or a frame's
+ * document goes first among the children of its element.
+ */
 export type Spec =
     | { text: string }
     | { comment: string }
+    | { shadow: Spec[] }
+    | { document: Spec[]; url?: string; quirks?: boolean }
     | { tag: string; namespace?: string | undefined; attributes?: string[]; children?: Spec[] }
 
 /** Gives a spec preorder ids from `ids.next` on. Elements without a namespace inherit their parent's. */
@@ -27,6 +33,18 @@ export function build(spec: Spec, ids: { next: number }, parentNamespace: string
     }
     if ('comment' in spec) {
         return { kind: NodeKind.Comment, id, data: spec.comment }
+    }
+    if ('shadow' in spec) {
+        return { kind: NodeKind.ShadowRoot, id, closed: false, children: spec.shadow.map(child => build(child, ids)) }
+    }
+    if ('document' in spec) {
+        return {
+            kind: NodeKind.Document,
+            id,
+            url: spec.url ?? 'https://example.com/frame/page.html',
+            quirks: spec.quirks ?? false,
+            children: spec.document.map(child => build(child, ids))
+        }
     }
     const namespace = spec.namespace ?? parentNamespace
     const children = (spec.children ?? []).map(child => build(child, ids, namespace))
@@ -86,7 +104,11 @@ const TRACKS: Record<number, number> = {
     [EventType.PointerButton]: Track.Pointer,
     [EventType.Scroll]: Track.Scroll,
     [EventType.Viewport]: Track.Viewport,
-    [EventType.Navigation]: Track.Navigation
+    [EventType.Navigation]: Track.Navigation,
+    [EventType.StyleSheet]: Track.Dom,
+    [EventType.AdoptedStyleSheets]: Track.Dom,
+    [EventType.FontFace]: Track.Assets,
+    [EventType.Asset]: Track.Assets
 }
 
 export const SESSION: SegmentInfo = { sessionId: 'player-test', segment: 0, startedAt: 1_760_000_000_000, meta: {} }
@@ -124,6 +146,9 @@ export function describeTree(root: SerializedNode): string {
             case NodeKind.Document:
                 lines.push(`${indent}#document`)
                 break
+            case NodeKind.ShadowRoot:
+                lines.push(`${indent}#shadow-root`)
+                break
             case NodeKind.Doctype:
                 lines.push(`${indent}<!DOCTYPE ${node.name}>`)
                 return
@@ -150,8 +175,16 @@ export function describeTree(root: SerializedNode): string {
     return lines.join('\n')
 }
 
+export interface DescribeOptions {
+    /** The document to show in a frame, if any: the initial document of a frame is no recorded one. */
+    frameDocument?: (frame: Element) => Document | undefined
+    /** Also shows what the markup does not: the values of form controls and the rules of style sheets. */
+    state?: boolean
+}
+
 /** `describeTree` for a DOM, leaving out what the player adds. */
-export function describeDom(root: Node): string {
+export function describeDom(root: Node, options: DescribeOptions = {}): string {
+    const { frameDocument = none, state = false } = options
     const lines: string[] = []
     const visit = (node: Node, depth: number): void => {
         const indent = '  '.repeat(depth)
@@ -169,8 +202,19 @@ export function describeDom(root: Node): string {
             }
             const pairs = [...node.attributes].map(({ name, value }): [string, string] => [name, value])
             lines.push(`${indent}${openTag(node.namespaceURI ?? '', node.localName, pairs)}`)
+            if (state) {
+                lines.push(...stateOf(node).map(line => `${indent}  ${line}`))
+            }
+            const content = node.shadowRoot ?? frameDocument(node)
+            if (content !== undefined) {
+                visit(content, depth + 1)
+            }
         } else {
-            lines.push(`${indent}#document`)
+            lines.push(`${indent}${node.nodeType === 11 ? '#shadow-root' : '#document'}`)
+            const adopted = isDocument(node) || isShadowRoot(node) ? node.adoptedStyleSheets : []
+            if (state && adopted.length > 0) {
+                lines.push(`${indent}  @adopted ${JSON.stringify(adopted.map(rulesOf))}`)
+            }
         }
         for (const child of node.childNodes) {
             visit(child, depth + 1)
@@ -178,6 +222,26 @@ export function describeDom(root: Node): string {
     }
     visit(root, 0)
     return lines.join('\n')
+}
+
+/** What an element holds besides its markup. */
+function stateOf(element: Element): string[] {
+    if (isInput(element)) {
+        return [`@value ${JSON.stringify(element.value)}`, ...(element.checked ? ['@checked'] : [])]
+    }
+    if (isTextArea(element)) {
+        return [`@value ${JSON.stringify(element.value)}`]
+    }
+    const sheet = isStyle(element) ? element.sheet : null
+    return sheet === null ? [] : [`@rules ${JSON.stringify(rulesOf(sheet))}`]
+}
+
+function rulesOf(sheet: CSSStyleSheet): string[] {
+    return [...sheet.cssRules].map(rule => rule.cssText)
+}
+
+function none(): undefined {
+    return undefined
 }
 
 // Node checks that work across realms: tested documents live in frames.

@@ -1,10 +1,10 @@
 import { EventType, PointerAction, PointerType } from '@timecat-js/protocol'
 import * as fc from 'fast-check'
 import { afterEach, describe, expect, it } from 'vitest'
-import { isInput, isTextArea } from '../src/dom.ts'
+import { isFrame } from '../src/dom.ts'
 import { createPlayer, TcrDecodeError } from '../src/index.ts'
 import type { Player, PlayerOptions, RecordingSource } from '../src/index.ts'
-import { operation, recordingOf } from './operations.ts'
+import { operations, recordingOf } from './operations.ts'
 import { build, describeDom, mutations, pageOf, SESSION, writeRecording } from './recording.ts'
 import type { Timed } from './recording.ts'
 
@@ -46,12 +46,13 @@ function paragraphs(player: Player): (string | null)[] {
     return [...player.document.querySelectorAll('p')].map(paragraph => paragraph.textContent)
 }
 
-/** What the replay shows: the tree, and the values of its form controls. */
+/** What the replay shows: the tree with the documents of frames, form values and style sheets. */
 function stateOf(player: Player): string {
-    const values = [...player.document.querySelectorAll('input, textarea')].map(control =>
-        isInput(control) || isTextArea(control) ? control.value : ''
-    )
-    return `${describeDom(player.document)}\n${JSON.stringify(values)}`
+    return describeDom(player.document, { frameDocument: contentDocumentOf, state: true })
+}
+
+function contentDocumentOf(frame: Element): Document | undefined {
+    return (isFrame(frame) ? frame.contentDocument : null) ?? undefined
 }
 
 // body 5: p 6 ("one" 7), then p 8 ("two" 9)
@@ -117,11 +118,11 @@ describe('createPlayer', () => {
     it('shows the same page at any time, however it got there', async () => {
         await fc.assert(
             fc.asyncProperty(
-                fc.array(operation, { minLength: 1, maxLength: 80 }),
+                operations(80),
                 fc.integer({ min: 1, max: 30 }),
                 fc.array(fc.nat(), { minLength: 1, maxLength: 10 }),
-                async (operations, keyframeInterval, picks) => {
-                    const events = recordingOf(operations)
+                async (steps, keyframeInterval, picks) => {
+                    const events = recordingOf(steps)
                     const recording = writeRecording(events)
                     const times = picks.map(pick => pick % (events.length + 1))
                     // Without keyframes of its own, the reference only ever applies the events in order.

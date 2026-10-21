@@ -73,10 +73,12 @@ export function sanitize(element: Element, name: string, value: string | null): 
 
 function isBlocked(tag: string, name: string, value: string): boolean {
     switch (tag) {
-        // Recorded frames are separate documents, which the recording does not have.
+        // The player builds the documents of frames from the recording: a URL would load another one, and a
+        // sandbox or a policy of their own would keep the player out. Frames inherit the replay's sandbox anyway.
         case 'iframe':
+            return name === 'src' || name === 'srcdoc' || name === 'sandbox' || name === 'csp'
         case 'frame':
-            return name === 'src' || name === 'srcdoc'
+            return name === 'src'
         case 'object':
             return name === 'data'
         case 'embed':

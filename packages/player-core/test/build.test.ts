@@ -8,16 +8,20 @@ import {
     InputKind,
     PointerAction,
     PointerType,
+    readEventFrames,
+    SheetChangeKind,
+    SheetOwner,
     Track,
     writeChunk
 } from '@timecat-js/protocol'
+import type { TcrEvent } from '@timecat-js/protocol'
 import * as fc from 'fast-check'
 import { describe, expect, it } from 'vitest'
 import { buildIndex } from '../src/timeline/build.ts'
 import { Timeline } from '../src/timeline/timeline.ts'
 import type { TimelineIndex } from '../src/timeline/types.ts'
 import { VirtualDocument } from '../src/timeline/virtual.ts'
-import { operation, recordingOf } from './operations.ts'
+import { operations, recordingOf } from './operations.ts'
 import { build, describeTree, mutations, pageOf, SESSION, writeRecording } from './recording.ts'
 
 const options = { keyframeInterval: 2000 }
@@ -31,6 +35,15 @@ function timesOf(index: TimelineIndex): number[] {
 }
 
 const page = pageOf([{ tag: 'p', children: [{ text: 'hello' }] }])
+
+/** The events of a keyframe's sheets, which are left uncompressed when there are none. */
+function gunzipStyles(styles: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
+    return styles.length === 0 ? Promise.resolve(styles) : gunzip(styles)
+}
+
+function eventsOf(payload: Uint8Array): (TcrEvent | undefined)[] {
+    return readEventFrames(payload, 0).map(({ type, body }) => decodeEvent(type, body, { next: 0 }))
+}
 
 function treeOf(body: Uint8Array, ids: { next: number }): string {
     const snapshot = decodeEvent(EventType.Snapshot, body, ids)
@@ -219,47 +232,111 @@ describe('buildIndex', () => {
         expect(index.end).toBe(150)
     })
 
+    it('keeps fonts and assets apart from the events: they hold for the whole recording', async () => {
+        const font: TcrEvent = {
+            type: EventType.FontFace,
+            family: 'Brand',
+            source: 'url("blob:https://example.com/font")',
+            descriptors: ['weight', '700']
+        }
+        const asset: TcrEvent = {
+            type: EventType.Asset,
+            url: 'blob:https://example.com/font',
+            mimeType: 'font/woff2',
+            data: new Uint8Array([1, 2, 3])
+        }
+        const index = await buildIndex(
+            [
+                writeRecording([
+                    { time: 0, event: page },
+                    { time: 40, event: font },
+                    { time: 50, event: mutations({ texts: [{ id: 7, data: 'x' }] }) },
+                    { time: 60, event: asset }
+                ])
+            ],
+            options
+        )
+        expect(typesOf(index)).toEqual([EventType.Snapshot, EventType.Mutations])
+        expect(eventsOf(index.statics)).toEqual([font, asset])
+        expect(index.end).toBe(60)
+    })
+
+    it('restores the sheets the CSSOM changed from keyframes, and counts their rules in the cost', async () => {
+        // body 5: p 6 ("hello" 7), then a style 8 ("p {}" 9)
+        const style = build({ tag: 'style', children: [{ text: 'p {}' }] }, { next: page.nextId })
+        const constructed: TcrEvent = {
+            type: EventType.StyleSheet,
+            owner: SheetOwner.Constructed,
+            id: 1,
+            changes: [{ kind: SheetChangeKind.Replace, rules: ['a { color: red; }'] }]
+        }
+        const adopted: TcrEvent = { type: EventType.AdoptedStyleSheets, id: 1, sheets: [1, 2] }
+        const inserted: TcrEvent = {
+            type: EventType.StyleSheet,
+            owner: SheetOwner.Node,
+            id: 8,
+            changes: [{ kind: SheetChangeKind.Insert, index: 1, rule: 'b { color: blue; }' }]
+        }
+        const index = await buildIndex(
+            [
+                writeRecording([
+                    { time: 0, event: page },
+                    { time: 1, event: constructed },
+                    { time: 2, event: adopted },
+                    { time: 3, event: mutations({ adds: [{ parentId: 5, beforeId: 0, nodes: [style] }] }) },
+                    { time: 4, event: inserted }
+                ])
+            ],
+            { keyframeInterval: 1 }
+        )
+        expect(index.keyframes.map(keyframe => keyframe.index)).toEqual([1, 5])
+        const keyframe = index.keyframes[1]!
+        // 9 nodes, the rule of the constructed sheet and the one the CSSOM inserted.
+        expect(keyframe.cost).toBe(11)
+        // Sheet 2 was never made.
+        expect(eventsOf(await gunzip(keyframe.styles))).toEqual([constructed, inserted, { ...adopted, sheets: [1] }])
+        expect(index.keyframes[0]!.styles).toEqual(new Uint8Array(0))
+    })
+
     it('writes keyframes that match applying the events before them', async () => {
         await fc.assert(
-            fc.asyncProperty(
-                fc.array(operation, { minLength: 1, maxLength: 80 }),
-                fc.integer({ min: 1, max: 40 }),
-                async (operations, interval) => {
-                    const events = recordingOf(operations)
-                    const index = await buildIndex([writeRecording(events)], { keyframeInterval: interval })
-                    expect(index.warnings).toEqual([])
-                    const timeline = new Timeline(index)
-                    const { keyframes, events: table } = index
-                    // Keyframes follow an event and share its time. Recorded ones follow the snapshot they show.
-                    expect(keyframes.map(keyframe => keyframe.time)).toEqual(
-                        keyframes.map(keyframe => table.times[keyframe.index - 1])
-                    )
-                    const recorded = keyframes.filter(keyframe => keyframe.recorded)
-                    expect(recorded.map(keyframe => table.types[keyframe.index - 1])).toEqual(
-                        recorded.map(() => EventType.Snapshot)
-                    )
-                    const synthetic = keyframes.filter(keyframe => !keyframe.recorded)
-                    const snapshots = await Promise.all(synthetic.map(keyframe => gunzip(keyframe.snapshot)))
-                    for (const [n, keyframe] of synthetic.entries()) {
-                        // A fresh document, given the events before the keyframe, ends up in the keyframe's state.
-                        const reference = new VirtualDocument()
-                        for (let i = 0; i < keyframe.index; i++) {
-                            reference.apply(timeline.event(i)!)
-                        }
-                        const expected = reference.encode(0)!
-                        const ids = { next: 0 }
-                        expect(treeOf(snapshots[n]!, ids)).toBe(treeOf(expected.snapshot, { next: 0 }))
-                        expect(keyframe.input).toEqual(expected.input)
-                        expect(keyframe.scroll).toEqual(expected.scroll)
-                        // Mutations after the keyframe go on with the ids it declares.
-                        expect(ids.next).toBe(table.idBases[keyframe.index] ?? ids.next)
+            fc.asyncProperty(operations(80), fc.integer({ min: 1, max: 40 }), async (steps, interval) => {
+                const events = recordingOf(steps)
+                const index = await buildIndex([writeRecording(events)], { keyframeInterval: interval })
+                expect(index.warnings).toEqual([])
+                const timeline = new Timeline(index)
+                const { keyframes, events: table } = index
+                // Keyframes follow an event and share its time. Recorded ones follow the snapshot they show.
+                expect(keyframes.map(keyframe => keyframe.time)).toEqual(
+                    keyframes.map(keyframe => table.times[keyframe.index - 1])
+                )
+                const recorded = keyframes.filter(keyframe => keyframe.recorded)
+                expect(recorded.map(keyframe => table.types[keyframe.index - 1])).toEqual(
+                    recorded.map(() => EventType.Snapshot)
+                )
+                const synthetic = keyframes.filter(keyframe => !keyframe.recorded)
+                const snapshots = await Promise.all(synthetic.map(keyframe => gunzip(keyframe.snapshot)))
+                const styles = await Promise.all(synthetic.map(keyframe => gunzipStyles(keyframe.styles)))
+                for (const [n, keyframe] of synthetic.entries()) {
+                    // A fresh document, given the events before the keyframe, ends up in the keyframe's state.
+                    const reference = new VirtualDocument()
+                    for (let i = 0; i < keyframe.index; i++) {
+                        reference.apply(timeline.event(i)!)
                     }
-                    // Keyframes come in order, at most one after each event.
-                    const positions = keyframes.map(keyframe => keyframe.index)
-                    expect(positions).toEqual(positions.toSorted((a, b) => a - b))
-                    expect(new Set(positions).size).toBe(positions.length)
+                    const expected = reference.encode(0)!
+                    const ids = { next: 0 }
+                    expect(treeOf(snapshots[n]!, ids)).toBe(treeOf(expected.snapshot, { next: 0 }))
+                    expect(keyframe.input).toEqual(expected.input)
+                    expect(keyframe.scroll).toEqual(expected.scroll)
+                    expect(styles[n]).toEqual(expected.styles)
+                    // Mutations after the keyframe go on with the ids it declares.
+                    expect(ids.next).toBe(table.idBases[keyframe.index] ?? ids.next)
                 }
-            ),
+                // Keyframes come in order, at most one after each event.
+                const positions = keyframes.map(keyframe => keyframe.index)
+                expect(positions).toEqual(positions.toSorted((a, b) => a - b))
+                expect(new Set(positions).size).toBe(positions.length)
+            }),
             { numRuns: 40 }
         )
     })

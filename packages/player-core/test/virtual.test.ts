@@ -1,8 +1,17 @@
-import { decodeEvent, EventType, InputKind, NodeKind } from '@timecat-js/protocol'
-import type { SerializedNode } from '@timecat-js/protocol'
+import {
+    decodeEvent,
+    EventType,
+    InputKind,
+    NodeKind,
+    readEventFrames,
+    SheetChangeKind,
+    SheetOwner
+} from '@timecat-js/protocol'
+import type { SerializedNode, SheetChange, TcrEvent } from '@timecat-js/protocol'
 import { describe, expect, it } from 'vitest'
 import { VirtualDocument } from '../src/timeline/virtual.ts'
 import { build, describeTree, mutations, pageOf, snapshotOf } from './recording.ts'
+import type { Spec } from './recording.ts'
 
 /** Decodes the state a virtual document encodes. */
 function stateOf(document: VirtualDocument, nextId: number) {
@@ -30,6 +39,37 @@ function html(id: number): SerializedNode {
 
 function treeOf(document: VirtualDocument): string {
     return describeTree(stateOf(document, 1000).snapshot.root)
+}
+
+/** The events that restore the sheets of a virtual document's state. */
+function stylesOf(document: VirtualDocument): TcrEvent[] {
+    const styles = document.encode(1000)?.styles ?? new Uint8Array(0)
+    return readEventFrames(styles, 0).map(({ type, body }) => decodeEvent(type, body, { next: 0 })!)
+}
+
+/** A run that adds the node `spec` describes, numbered from `id`, to `parentId`. */
+function add(parentId: number, spec: Spec, id: number, beforeId = 0) {
+    return { parentId, beforeId, nodes: [build(spec, { next: id })] }
+}
+
+function replace(...rules: string[]): SheetChange {
+    return { kind: SheetChangeKind.Replace, rules }
+}
+
+function insert(index: number, rule: string): SheetChange {
+    return { kind: SheetChangeKind.Insert, index, rule }
+}
+
+function remove(index: number): SheetChange {
+    return { kind: SheetChangeKind.Delete, index }
+}
+
+function sheet(owner: SheetOwner, id: number, ...changes: SheetChange[]): TcrEvent {
+    return { type: EventType.StyleSheet, owner, id, changes }
+}
+
+function adopt(id: number, sheets: number[]): TcrEvent {
+    return { type: EventType.AdoptedStyleSheets, id, sheets }
 }
 
 describe('VirtualDocument', () => {
@@ -196,6 +236,144 @@ describe('VirtualDocument', () => {
             changes: [{ kind: InputKind.Checked, id: 7, checked: true }]
         })
         expect(stateOf(document, 9).scroll).toEqual({ type: EventType.Scroll, positions: [{ id: 1, x: 0, y: 300 }] })
+    })
+
+    it('attaches shadow roots and the documents of frames where the DOM takes them', () => {
+        const document = new VirtualDocument()
+        // body 5: div 6, input 7, iframe 8, p 9
+        document.apply(pageOf([{ tag: 'div' }, { tag: 'input' }, { tag: 'iframe' }, { tag: 'p' }]))
+        const cost = document.apply(
+            mutations({
+                adds: [
+                    add(6, { shadow: [{ tag: 'span', children: [{ text: 'shadow' }] }] }, 10),
+                    // An input cannot host a shadow root, and a host keeps its first one.
+                    add(7, { shadow: [] }, 13),
+                    add(6, { shadow: [] }, 14),
+                    add(8, { document: [{ tag: 'html', children: [{ tag: 'body' }] }] }, 15),
+                    // Only frames show documents.
+                    add(9, { document: [] }, 18),
+                    // Shadow roots and documents are no siblings: inserting before them appends.
+                    add(6, { text: 'light' }, 19, 10),
+                    add(8, { comment: 'fallback' }, 20, 15)
+                ]
+            })
+        )
+        expect(cost).toBe(3 + 3 + 2)
+        expect(treeOf(document)).toContain(
+            [
+                '    <body>',
+                '      <div>',
+                '        #shadow-root',
+                '          <span>',
+                '            "shadow"',
+                '        "light"',
+                '      <input>',
+                '      <iframe>',
+                '        #document',
+                '          <html>',
+                '            <body>',
+                '        <!--fallback-->',
+                '      <p>'
+            ].join('\n')
+        )
+        expect(document.size).toBe(9 + 8)
+        // A new document replaces the frame's; removing it leaves the frame empty. Shadow roots stay.
+        document.apply(mutations({ adds: [add(8, { document: [{ comment: 'second' }] }, 21)] }))
+        expect(document.size).toBe(9 + 8 - 3 + 2)
+        expect(treeOf(document)).toContain(
+            ['      <iframe>', '        #document', '          <!--second-->'].join('\n')
+        )
+        document.apply(mutations({ removes: [21, 10] }))
+        expect(treeOf(document)).toContain(
+            ['        "light"', '      <input>', '      <iframe>', '        <!--fallback-->'].join('\n')
+        )
+        expect(document.size).toBe(9 + 8 - 3)
+    })
+
+    it('leaves out the shadow roots and documents of a snapshot that the DOM does not take', () => {
+        const document = new VirtualDocument()
+        // body 5: input 6 (#shadow-root 7), div 8 (#document 9), iframe 10 (#document 11: "text" 12, html 13
+        // (#shadow-root 14), comment 15), x-card 16 (#shadow-root 17 (b 18))
+        document.apply(
+            pageOf([
+                { tag: 'input', children: [{ shadow: [] }] },
+                { tag: 'div', children: [{ document: [] }] },
+                {
+                    tag: 'iframe',
+                    children: [
+                        { document: [{ text: 'text' }, { tag: 'html', children: [{ shadow: [] }] }, { comment: 'c' }] }
+                    ]
+                },
+                { tag: 'x-card', children: [{ shadow: [{ tag: 'b' }] }] }
+            ])
+        )
+        expect(document.size).toBe(5 + 13 - 4)
+        expect(treeOf(document)).toContain(
+            [
+                '      <input>',
+                '      <div>',
+                '      <iframe>',
+                '        #document',
+                '          <html>',
+                '          <!--c-->',
+                '      <x-card>',
+                '        #shadow-root',
+                '          <b>'
+            ].join('\n')
+        )
+    })
+
+    it('keeps what the CSSOM changed, for keyframes to restore', () => {
+        const document = new VirtualDocument()
+        // head 4: style 5 ("p {}" 6); body 7: div 8 (#shadow-root 9)
+        document.apply(
+            pageOf([{ tag: 'div', children: [{ shadow: [] }] }], {
+                head: [{ tag: 'style', children: [{ text: 'p {}' }] }]
+            })
+        )
+        // Changes before the first replace stay as they are, the replace takes in those after it.
+        expect(document.apply(sheet(SheetOwner.Node, 5, insert(0, 'a {}')))).toBe(1)
+        document.apply(sheet(SheetOwner.Node, 5, insert(1, 'b {}')))
+        expect(stylesOf(document)).toEqual([sheet(SheetOwner.Node, 5, insert(0, 'a {}'), insert(1, 'b {}'))])
+        expect(document.apply(sheet(SheetOwner.Node, 5, replace('x {}', 'y {}'), insert(9, 'z {}'), remove(0)))).toBe(4)
+        // Elements without a sheet keep no changes.
+        document.apply(sheet(SheetOwner.Node, 8, replace('div {}')))
+        document.apply(sheet(SheetOwner.Constructed, 2, insert(3, 'c {}')))
+        document.apply(sheet(SheetOwner.Constructed, 1, replace('d {}', 'e {}')))
+        // Sheets without an event yet are left out.
+        document.apply(adopt(1, [1, 3, 2]))
+        document.apply(adopt(9, [2]))
+        document.apply(adopt(8, [1]))
+        document.apply(sheet(SheetOwner.Constructed, 3, replace()))
+        expect(stylesOf(document)).toEqual([
+            sheet(SheetOwner.Constructed, 2, replace('c {}')),
+            sheet(SheetOwner.Constructed, 1, replace('d {}', 'e {}')),
+            sheet(SheetOwner.Constructed, 3, replace()),
+            sheet(SheetOwner.Node, 5, replace('y {}', 'z {}')),
+            adopt(1, [1, 2]),
+            adopt(9, [2])
+        ])
+        expect(document.encode(1000)?.rules).toBe(2 + 1 + 2)
+        // A `<style>` parses its text anew when its children change; a root that goes forgets what it adopts.
+        document.apply(mutations({ removes: [8], texts: [{ id: 6, data: 'q {}' }] }))
+        document.apply(adopt(1, []))
+        expect(stylesOf(document)).toEqual([
+            sheet(SheetOwner.Constructed, 2, replace('c {}')),
+            sheet(SheetOwner.Constructed, 1, replace('d {}', 'e {}')),
+            sheet(SheetOwner.Constructed, 3, replace())
+        ])
+        document.apply(sheet(SheetOwner.Node, 5, insert(0, 'a {}')))
+        document.apply(mutations({ adds: [add(5, { comment: 'c' }, 10)] }))
+        expect(stylesOf(document)).toHaveLength(3)
+        // So does one whose type is set; not one whose title is.
+        document.apply(sheet(SheetOwner.Node, 5, insert(0, 'a {}')))
+        document.apply(mutations({ attributes: [{ id: 5, name: 'title', value: 't' }] }))
+        expect(stylesOf(document)).toHaveLength(4)
+        document.apply(mutations({ attributes: [{ id: 5, name: 'type', value: 'text/css' }] }))
+        expect(stylesOf(document)).toHaveLength(3)
+        // A snapshot starts over.
+        document.apply(pageOf([]))
+        expect(document.encode(1000)?.styles).toHaveLength(0)
     })
 
     it('starts over at a snapshot and follows navigations', () => {
