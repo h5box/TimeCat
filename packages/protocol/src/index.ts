@@ -1,3 +1,5 @@
+export { decodeEvent, encodeEvent } from './codec.ts'
+export type { IdCounter } from './codec.ts'
 export { gunzip, gzip } from './compression.ts'
 export {
     ChunkFlag,
@@ -12,6 +14,32 @@ export {
 } from './container.ts'
 export type { Chunk, FileHeader, SegmentInfo } from './container.ts'
 export { TcrDecodeError } from './errors.ts'
+export { EventWriter } from './event-writer.ts'
+export { EventType, InputKind, Namespace, NodeKind, PointerAction, PointerType } from './events.ts'
+export type {
+    AddedRun,
+    AttributeChange,
+    CommentNode,
+    DoctypeNode,
+    DocumentNode,
+    ElementNode,
+    InputChange,
+    InputEvent,
+    MutationsEvent,
+    NavigationEvent,
+    PointerButtonEvent,
+    PointerMovesEvent,
+    ScrollEvent,
+    ScrollPosition,
+    SerializedNode,
+    SnapshotEvent,
+    TcrEvent,
+    TextChange,
+    TextNode,
+    ViewportEvent
+} from './events.ts'
+export { readEventFrames, writeEventFrame } from './frames.ts'
+export type { EventFrame } from './frames.ts'
 export { ByteReader } from './reader.ts'
 export { StringTableReader, StringTableWriter } from './strings.ts'
 export { FIRST_DYNAMIC_TRACK, Track } from './tracks.ts'
