@@ -17,6 +17,14 @@ interface RunResult extends RecordedData {
     startMs: number
     /** Main-thread task time from recording start to the end of the scenario (CDP TaskDuration). */
     taskMs: number
+    /**
+     * Parts of it, in the results file only: script, layout and style (CDP ScriptDuration, LayoutDuration and
+     * RecalcStyleDuration). Script leaves out code that resumes after `scheduler.yield()`, such as most of a
+     * time-sliced snapshot.
+     */
+    scriptMs: number
+    layoutMs: number
+    styleMs: number
     longTasks: number
     longestTaskMs: number
 }
@@ -102,19 +110,22 @@ async function measure(target: Browser, scenario: Scenario, recorder: RecorderAd
             await cdp.send('Emulation.setCPUThrottlingRate', { rate: cpuThrottle })
         }
 
-        const before = await taskDuration(cdp)
+        const before = await mainThreadTime(cdp)
         const startMs = await page.evaluate(recorder.start)
         await scenario.run(page)
         if (recorder.settle) {
             await page.evaluate(recorder.settle)
         }
-        const taskMs = (await taskDuration(cdp)) - before
+        const after = await mainThreadTime(cdp)
 
         const longTasks = await page.evaluate(() => window.timecatBench?.longTasksSinceRecordStart() ?? [])
         const data = await page.evaluate(recorder.stop)
         return {
             startMs,
-            taskMs,
+            taskMs: after.taskMs - before.taskMs,
+            scriptMs: after.scriptMs - before.scriptMs,
+            layoutMs: after.layoutMs - before.layoutMs,
+            styleMs: after.styleMs - before.styleMs,
             longTasks: longTasks.length,
             longestTaskMs: Math.max(0, ...longTasks.map(task => task.duration)),
             ...data
@@ -124,10 +135,18 @@ async function measure(target: Browser, scenario: Scenario, recorder: RecorderAd
     }
 }
 
-/** Cumulative main-thread task time of the page, in milliseconds. */
-async function taskDuration(cdp: CDPSession): Promise<number> {
+/** Cumulative main-thread time of the page, in milliseconds. */
+async function mainThreadTime(
+    cdp: CDPSession
+): Promise<Pick<RunResult, 'taskMs' | 'scriptMs' | 'layoutMs' | 'styleMs'>> {
     const { metrics } = await cdp.send('Performance.getMetrics')
-    return (metrics.find(metric => metric.name === 'TaskDuration')?.value ?? 0) * 1000
+    const ms = (name: string): number => (metrics.find(metric => metric.name === name)?.value ?? 0) * 1000
+    return {
+        taskMs: ms('TaskDuration'),
+        scriptMs: ms('ScriptDuration'),
+        layoutMs: ms('LayoutDuration'),
+        styleMs: ms('RecalcStyleDuration')
+    }
 }
 
 function medianOf(results: RunResult[]): RunResult {
@@ -139,6 +158,9 @@ function medianOf(results: RunResult[]): RunResult {
     return {
         startMs: median('startMs'),
         taskMs: median('taskMs'),
+        scriptMs: median('scriptMs'),
+        layoutMs: median('layoutMs'),
+        styleMs: median('styleMs'),
         longTasks: median('longTasks'),
         longestTaskMs: median('longestTaskMs'),
         events: median('events'),
