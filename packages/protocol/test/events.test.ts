@@ -399,19 +399,29 @@ describe('other events', () => {
         )
     })
 
-    it('store pointer moves as small column deltas', () => {
+    it('store pointer moves as small second differences', () => {
         const times = Array.from({ length: 100 }, (_, i) => i * 16)
         const xs = times.map((_, i) => 500 + i)
         const ys = times.map((_, i) => 300 - i)
         const body = encodeEvent({ type: EventType.PointerMoves, pointer: PointerType.Mouse, times, xs, ys })
-        // Pointer type and count, then one byte per value: 16 ms gaps and ±1 px steps.
+        // Pointer type and count, then one byte per value, nearly all zeros: 16 ms gaps and ±1 px steps throughout.
         expect(body.length).toBeLessThan(310)
+        expect(body.filter(byte => byte === 0).length).toBeGreaterThan(290)
     })
 
     it('reject a pointer sample that does not start at offset 0', () => {
         expect(() =>
             encodeEvent({ type: EventType.PointerMoves, pointer: PointerType.Mouse, times: [5], xs: [0], ys: [0] })
         ).toThrow(RangeError)
+    })
+
+    it('reject pointer sample times that go back', () => {
+        const moves = { type: EventType.PointerMoves, pointer: PointerType.Mouse, xs: [0, 1, 2], ys: [0, 1, 2] }
+        expect(() => encodeEvent({ ...moves, times: [0, 10, 5] })).toThrow(RangeError)
+        // Times 0, 10, 20 are written as 10, 0; making the 0 a -15 (zigzag 29) makes the second step -5.
+        const decreasing = encodeEvent({ ...moves, times: [0, 10, 20] })
+        decreasing[3] = 29
+        expect(decodeOutcome(EventType.PointerMoves, decreasing)).toBe('TcrDecodeError')
     })
 })
 

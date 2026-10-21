@@ -77,9 +77,9 @@ export function encodeEvent(event: TcrEvent): Uint8Array<ArrayBuffer> {
             }
             bytes.u8(event.pointer)
             bytes.varuint(count)
-            writeDeltas(bytes, times, false)
-            writeDeltas(bytes, xs, true)
-            writeDeltas(bytes, ys, true)
+            writeColumn(bytes, times, true)
+            writeColumn(bytes, xs, false)
+            writeColumn(bytes, ys, false)
             break
         }
         case EventType.PointerButton:
@@ -135,13 +135,13 @@ export function decodeEvent(type: number, body: Uint8Array, ids: IdCounter): Tcr
             if (count === 0) {
                 throw new TcrDecodeError('pointer moves must contain at least one sample')
             }
-            // Each sample takes at least three bytes (time delta, x, y).
+            // Each sample takes at least a byte per column; the first one's time is left out.
             if (count * 3 - 1 > r.remaining) {
                 throw new TcrDecodeError('pointer sample count exceeds the event size')
             }
-            const times = readDeltas(r, count, false)
-            const xs = readDeltas(r, count, true)
-            const ys = readDeltas(r, count, true)
+            const times = readColumn(r, count, true)
+            const xs = readColumn(r, count, false)
+            const ys = readColumn(r, count, false)
             return { type, pointer, times, xs, ys }
         }
         case EventType.PointerButton: {
@@ -445,32 +445,43 @@ function readPointerType(r: ByteReader): PointerType {
     return pointer
 }
 
-/** First value as is (times start at 0 and are left out), then differences to the previous value. */
-function writeDeltas(bytes: ByteWriter, values: number[], signed: boolean): void {
+/**
+ * A column of pointer samples: the first value as is (times start at 0 and are left out), then second differences,
+ * each step minus the step before it (0 before the first). Steady movement makes them 0 and smooth movement keeps
+ * them near it, which compresses far better than the steps themselves.
+ */
+function writeColumn(bytes: ByteWriter, values: number[], time: boolean): void {
     let previous = values[0]!
-    if (signed) {
+    if (!time) {
         bytes.varint(previous)
     } else if (previous !== 0) {
         throw new RangeError('the first pointer sample must be at time offset 0')
     }
+    let step = 0
     for (let i = 1; i < values.length; i++) {
         const value = values[i]!
-        if (signed) {
-            bytes.varint(value - previous)
-        } else {
-            bytes.varuint(value - previous)
+        const next = value - previous
+        if (time && next < 0) {
+            throw new RangeError('pointer sample times must not decrease')
         }
+        bytes.varint(next - step)
+        step = next
         previous = value
     }
 }
 
-function readDeltas(r: ByteReader, count: number, signed: boolean): number[] {
-    let value = signed ? r.varint() : 0
+function readColumn(r: ByteReader, count: number, time: boolean): number[] {
+    let value = time ? 0 : r.varint()
     const values = [value]
+    let step = 0
     for (let i = 1; i < count; i++) {
-        value += signed ? r.varint() : r.varuint()
-        if (!Number.isSafeInteger(value)) {
+        step += r.varint()
+        value += step
+        if (!Number.isSafeInteger(step) || !Number.isSafeInteger(value)) {
             throw new TcrDecodeError('pointer sample exceeds the safe integer range')
+        }
+        if (time && step < 0) {
+            throw new TcrDecodeError('pointer sample times must not decrease')
         }
         values.push(value)
     }
