@@ -16,7 +16,7 @@
         "browser": true
     },
     "rules": {
-        "vitest/expect-expect": ["error", { "assertFunctionNames": ["expect", "fc.assert"] }]
+        "vitest/expect-expect": ["error", { "assertFunctionNames": ["expect", "expect*", "fc.assert"] }]
     },
     "overrides": [
         {

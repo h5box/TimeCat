@@ -52,6 +52,7 @@
     },
     "devDependencies": {
         "@arethetypeswrong/core": "catalog:",
+        "@timecat-js/player-core": "workspace:^",
         "fast-check": "catalog:",
         "publint": "catalog:",
         "tsdown": "catalog:",
