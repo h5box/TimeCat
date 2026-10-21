@@ -118,6 +118,20 @@ pointer-scroll 一行是另跑 21 轮的结果：9 轮时 TimeCat 的 overhead �
 - **长任务**仍然没有，start 仍在 7–13ms。
 - **主线程开销**：snapshot-large 是 rrweb 的 51%（M1 是 48%），pointer-scroll 61%（56%），typing 64%（84%），mutations 多 13%（多 9%）。overhead 是两个中位数相减，噪声大；比较稳定的是 script 比对照组多出的部分：mutations 里 TimeCat 229ms、rrweb 300ms（M1 是 220ms 和 346ms），pointer-scroll 里 44ms 和 141ms（M1 是 42ms 和 176ms）。TimeCat 的脚本时间和 M1 基本持平，M2 新增的录制在这些页面上没有带来可见的开销。
 
+### Canvas（M3，2026-10-21）
+
+环境同上，`pnpm bench --scenario canvas --runs 9`。300 帧约 5 秒，两个录制器都按 15 fps 录 Canvas：
+
+| 录制器 | start | main thread | overhead | script | long tasks（最长） | 事件数 | 文件大小 | serialize |
+|---|---|---|---|---|---|---|---|---|
+| 对照组 | – | 952 ms | – | 113 ms | 0 | – | – | – |
+| rrweb | 93.9 ms | 1193 ms | 241 ms | 222 ms | 1（94 ms） | 68 | 626.6 KB（gzip 后） | 7.0 ms |
+| TimeCat | 6.2 ms | 1097 ms | 145 ms | 123 ms | 0 | 3 | 109.6 KB | 0.2 ms |
+
+- **数据量**：TimeCat 是 rrweb 的 17%，约 175 kbps。plugin-canvas 用 WebCodecs 编成 VP9，帧间只存变化；rrweb 每帧存一张 WebP，转成 base64 放进 JSON，gzip 也压不动。
+- **主线程**：TimeCat 的脚本时间只比对照组多 10ms，rrweb 多 110ms。编码在浏览器的编码器里完成，不占页面的主线程；TimeCat 多出的 main thread 有九成以上不在脚本里，是浏览器自己的任务，应该是 `captureStream` 每帧复制画面的开销。rrweb 开始录制时有一个 94ms 的长任务。
+- 事件数只算 TimeCat 的事件：视频的 packet 不是事件，写在媒体 chunk 里。
+
 ## Seek 基准
 
 - 在看板夹具（`dashboard.html`）上录一段 60 分钟、每秒 10 帧的会话，共 3.6 万帧，每帧的变更和 `mutations` 场景相同。录制用的是 `record()` 内部同样的 Capture 和 Pipeline，只是时钟由基准自己推进，所以一小时的会话十几秒就能录完。
