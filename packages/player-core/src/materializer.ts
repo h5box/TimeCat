@@ -17,6 +17,8 @@ import { Assets } from './assets.ts'
 import {
     HTML_NAMESPACE,
     isCharacterData,
+    isComment,
+    isDoctype,
     isDocument,
     isElement,
     isFrame,
@@ -26,6 +28,7 @@ import {
     isSelect,
     isShadowRoot,
     isStyle,
+    isText,
     isTextArea
 } from './dom.ts'
 import { FOREIGN_ATTRIBUTES, INERT_SCRIPT_TYPE, sanitize } from './sanitize.ts'
@@ -65,6 +68,19 @@ interface DocumentState {
     basesChanged: boolean
 }
 
+/** Recorded children being put into their parent, in order. */
+interface Level {
+    readonly parent: Node
+    readonly children: readonly SerializedNode[]
+    /** The player's base element of the document, which stays where it is. */
+    readonly base: Node | undefined
+    next: number
+    /** The last child put in place; those after it are left from before, until they are put in place or go. */
+    last: Node | null
+    /** Where each recorded child is in `children` by id, once needed. */
+    indexes: Map<number, number> | undefined
+}
+
 /**
  * Builds and changes the replayed DOM in a document of its own, by the same rules the indexer's virtual document
  * follows, so a keyframe matches what applying the events before it produces. Recorded content is untrusted:
@@ -73,11 +89,21 @@ interface DocumentState {
 export class Materializer {
     readonly #document: Document
     readonly #assets: Assets
-    readonly #nodes = new Map<number, Node>()
+    #nodes = new Map<number, Node>()
+    /**
+     * While a snapshot is built, the nodes shown before it, which it takes back where it has the same ones: what
+     * stays needs no new style, layout or paint, and images and frames do not load again.
+     */
+    #old: Map<number, Node> | undefined
     readonly #ids = new WeakMap<Node, number>()
     readonly #states = new Map<Document, DocumentState>()
+    /** The player's base element of each document, which stays from one snapshot to the next. */
+    readonly #bases = new WeakMap<Document, HTMLBaseElement>()
     /** The documents built in frames. */
     readonly #frames = new WeakMap<Element, Document>()
+    /** Elements scrolled away from the top, and `<style>` elements whose sheet changed: a snapshot resets both. */
+    readonly #scrolled = new WeakSet<Node>()
+    readonly #changedSheets = new WeakSet<Element>()
     /** Frames with a document to build in them, once they are in the replayed document. */
     readonly #pending: [HTMLIFrameElement | HTMLFrameElement, DocumentNode][] = []
     readonly #sheets: ConstructedSheets
@@ -106,17 +132,25 @@ export class Materializer {
         return id !== undefined && this.#nodes.get(id) === node ? id : undefined
     }
 
-    /** Replaces what the document shows with a snapshot. */
+    /**
+     * Replaces what the document shows with a snapshot. Nodes it shows already with the same id stay where they
+     * can, with their attributes and data changed to the snapshot's, which costs far less than new ones.
+     */
     build(snapshot: SnapshotEvent): void {
         const document = this.#document
         const root = snapshot.root
-        if (this.#quirks !== root.quirks) {
+        const reuse = this.#quirks === root.quirks
+        if (!reuse) {
             openDocument(document, root.quirks)
             this.#quirks = root.quirks
         }
-        this.#reset()
-        this.#build(document, root)
-        this.#buildFrames()
+        this.#reset(reuse)
+        try {
+            this.#build(document, root, reuse)
+            this.#buildFrames()
+        } finally {
+            this.#old = undefined
+        }
     }
 
     /** Shows nothing, as before the first snapshot. */
@@ -174,33 +208,69 @@ export class Materializer {
         return this.#scrolls.size > 0
     }
 
-    #reset(): void {
-        this.#nodes.clear()
+    /** Forgets what the document shows, or with `keep`, keeps it for the snapshot built next to take back. */
+    #reset(keep = false): void {
+        if (keep) {
+            this.#old = this.#nodes
+            this.#nodes = new Map()
+        } else {
+            this.#nodes.clear()
+            const document = this.#document
+            document.replaceChildren()
+            document.adoptedStyleSheets = []
+        }
         this.#states.clear()
         this.#scrolls.clear()
         this.#pending.length = 0
         this.#sheets.clear()
-        const document = this.#document
-        document.replaceChildren()
-        document.adoptedStyleSheets = []
     }
 
-    /** Builds a recorded document into `document`, which renders in the recorded mode. */
-    #build(document: Document, root: DocumentNode): void {
-        // What writing the document made, which recorded nodes replace.
-        document.replaceChildren()
-        const base = document.createElement('base')
-        base.setAttribute(PLAYER_ATTRIBUTE, '')
+    /**
+     * Builds a recorded document into `document`, which renders in the recorded mode. With `reuse`, `document`
+     * shows what was built in it before, which the snapshot changes rather than replaces where it can.
+     */
+    #build(document: Document, root: DocumentNode, reuse: boolean): void {
+        let base = reuse ? this.#bases.get(document) : undefined
+        const rootElement = root.children.find(child => child.kind === NodeKind.Element)
+        const kept =
+            base !== undefined &&
+            rootElement !== undefined &&
+            document.documentElement !== null &&
+            this.#reusable(rootElement, document) === document.documentElement
+        if (!kept || base === undefined) {
+            // What writing the document made, or showed before, which recorded nodes replace.
+            document.replaceChildren()
+            base = document.createElement('base')
+            base.setAttribute(PLAYER_ATTRIBUTE, '')
+            this.#bases.set(document, base)
+        } else if (!base.isConnected) {
+            document.documentElement?.prepend(base)
+        }
         const state: DocumentState = { document, base, bases: new Set(), url: root.url, basesChanged: false }
         this.#states.set(document, state)
         this.#register(document, root.id)
         // The viewport keeps the scroll position of what it showed before; a snapshot starts at the top, unless
-        // scroll positions after it say otherwise. Elements are new, so they start there anyway.
+        // scroll positions after it say otherwise. So do elements, new or not.
         this.#scrolls.set(document, { x: 0, y: 0, tries: 0 })
-        document.adoptedStyleSheets = []
+        if (document.adoptedStyleSheets.length > 0) {
+            document.adoptedStyleSheets = []
+        }
         this.#assets.addFonts(document)
-        // Set before any node exists, so every URL resolves against the recorded document's from the start.
+        // Set before any node is made, so every URL resolves against the recorded document's from the start.
         this.#setBaseUrl(state, firstBaseHref(root))
+        if (kept) {
+            // The root element stays, and the base element in it.
+            this.#createChildren(document, root.children)
+        } else {
+            this.#buildFresh(document, root, base)
+        }
+        // Base elements left out of the document, such as in a second root element, may have been found first.
+        this.#updateBase(state)
+        this.#placeBase(state)
+    }
+
+    /** Builds the children of a recorded document into `document`, which has none. */
+    #buildFresh(document: Document, root: DocumentNode, base: HTMLBaseElement): void {
         for (const child of root.children) {
             if (child.kind !== NodeKind.Element) {
                 const node = this.#create(child, document, document)
@@ -212,13 +282,10 @@ export class Materializer {
             // The root element goes in first, with the base element, and then its children.
             const element = this.#element(child, document)
             if (this.#insert(document, element, null)) {
-                element.append(base)
+                element.prepend(base)
                 this.#createChildren(element, child.children)
             }
         }
-        // Base elements left out of the document, such as in a second root element, may have been found first.
-        this.#updateBase(state)
-        this.#placeBase(state)
     }
 
     /** Builds the documents of the frames attached since the last call, now that the frames are in the document. */
@@ -227,15 +294,33 @@ export class Materializer {
         // The documents built here add their own frames.
         for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
             const [frame, root] = next
-            this.#forgetFrame(frame)
             // None for a frame that did not make it into the document.
             const document = frame.contentDocument
+            if (document !== null && this.#keepsDocument(frame, document, root)) {
+                this.#build(document, root, true)
+                continue
+            }
+            this.#forgetFrame(frame)
             if (document !== null) {
                 openDocument(document, root.quirks)
                 this.#frames.set(frame, document)
-                this.#build(document, root)
+                this.#build(document, root, false)
             }
         }
+    }
+
+    /**
+     * Whether a frame, built before the snapshot being built and still in the document, shows the document built
+     * in it then, in the mode the recorded one renders in. A frame put elsewhere loads a new document.
+     */
+    #keepsDocument(frame: Element, document: Document, root: DocumentNode): boolean {
+        const id = this.#ids.get(document)
+        return (
+            this.#frames.get(frame) === document &&
+            id !== undefined &&
+            this.#old?.get(id) === document &&
+            (document.compatMode === 'BackCompat') === root.quirks
+        )
     }
 
     #register(node: Node, id: number): void {
@@ -264,31 +349,124 @@ export class Materializer {
         return node
     }
 
-    /** Creates recorded children of `top` and their subtrees, and inserts them where the DOM takes them. */
+    /**
+     * Creates recorded children of `top` and their subtrees, and inserts them where the DOM takes them. While a
+     * snapshot is built, `top` and the nodes taken back may have children from before, which go unless taken back.
+     */
     #createChildren(top: Node, children: SerializedNode[]): void {
         const document = documentOf(top)
+        const base = this.#states.get(document)?.base
         // Iterative, so any depth works.
-        const stack: { parent: Node; children: SerializedNode[]; next: number }[] = [{ parent: top, children, next: 0 }]
+        const stack: Level[] = [level(top, children, base)]
         while (stack.length > 0) {
-            const level = stack[stack.length - 1]!
-            const child = level.children[level.next++]
+            const current = stack[stack.length - 1]!
+            const child = current.children[current.next++]
             if (child === undefined) {
                 stack.pop()
+                this.#discardRest(current)
                 continue
             }
-            const parent = level.parent
+            const parent = current.parent
             if (child.kind === NodeKind.Document || child.kind === NodeKind.ShadowRoot) {
                 const root = isElement(parent) ? this.#attach(parent, child) : undefined
                 if (root !== undefined) {
-                    stack.push({ parent: root, children: child.children, next: 0 })
+                    stack.push(level(root, child.children, base))
                 }
                 continue
             }
-            const node = this.#single(child, document, parent)
-            if (node !== undefined && this.#insert(parent, node, null) && child.kind === NodeKind.Element) {
-                stack.push({ parent: node, children: child.children, next: 0 })
+            const node = this.#single(child, document, parent, current)
+            if (node !== undefined && this.#place(current, node) && child.kind === NodeKind.Element) {
+                stack.push(level(node, child.children, base))
             }
         }
+    }
+
+    /**
+     * Puts a node after the last one its level put in place. While a snapshot is built, the children from before
+     * on the way go, unless the level takes them back later; the player's base element stays.
+     */
+    #place(current: Level, node: Node): boolean {
+        let before: Node | null = null
+        if (this.#old !== undefined) {
+            before = afterLast(current)
+            while (before !== null && before !== node) {
+                const next = before.nextSibling
+                if (before !== current.base) {
+                    if (this.#comesLater(current, before)) {
+                        break
+                    }
+                    this.#discard(before, current.base)
+                }
+                before = next
+            }
+        }
+        if (before === node || this.#insert(current.parent, node, before)) {
+            current.last = node
+            return true
+        }
+        return false
+    }
+
+    /** Whether a child from before is taken back later in its level, so it can stay where it is meanwhile. */
+    #comesLater(current: Level, node: Node): boolean {
+        const id = this.#ids.get(node)
+        if (id === undefined || this.#old?.get(id) !== node) {
+            return false
+        }
+        const children = current.children
+        current.indexes ??= new Map(children.map((child, i): [number, number] => [child.id, i]))
+        const index = current.indexes.get(id)
+        return (
+            index !== undefined && index >= current.next && this.#reusable(children[index]!, documentOf(node)) === node
+        )
+    }
+
+    /**
+     * Takes back the next child from before in a level for a recorded child of the same kind, when the level
+     * takes it back nowhere else: text that a page replaced, rather than changed, only changes.
+     */
+    #takeNext<T extends CharacterData>(current: Level, is: (node: Node) => node is T, id: number): T | undefined {
+        const old = this.#old
+        let next = old === undefined ? null : afterLast(current)
+        if (next !== null && next === current.base) {
+            next = next.nextSibling
+        }
+        const oldId = next === null ? undefined : this.#ids.get(next)
+        if (next === null || oldId === undefined || old?.get(oldId) !== next || !is(next)) {
+            return undefined
+        }
+        if (this.#comesLater(current, next)) {
+            return undefined
+        }
+        old.delete(oldId)
+        this.#register(next, id)
+        return next
+    }
+
+    /** Removes the children from before that a level did not take back. */
+    #discardRest(current: Level): void {
+        if (this.#old === undefined) {
+            return
+        }
+        let node = afterLast(current)
+        while (node !== null) {
+            const next = node.nextSibling
+            if (node !== current.base) {
+                this.#discard(node, current.base)
+            }
+            node = next
+        }
+    }
+
+    /**
+     * Removes a node from before that the snapshot has not taken back, or not yet: what is in it can still be taken
+     * back elsewhere. The player's base element moves out of it first, so URLs keep resolving meanwhile.
+     */
+    #discard(node: Node, base: Node | undefined): void {
+        if (base !== undefined && isElement(node) && node.contains(base)) {
+            documentOf(node).documentElement?.prepend(base)
+        }
+        node.parentNode?.removeChild(node)
     }
 
     /**
@@ -302,8 +480,18 @@ export class Materializer {
             }
             return undefined
         }
-        if (host.shadowRoot !== null) {
-            return undefined
+        const shadow = host.shadowRoot
+        if (shadow !== null) {
+            // A host taken back keeps its shadow root only for the same recorded one.
+            if (this.#old?.get(node.id) !== shadow) {
+                return undefined
+            }
+            this.#old.delete(node.id)
+            this.#nodes.set(node.id, shadow)
+            if (shadow.adoptedStyleSheets.length > 0) {
+                shadow.adoptedStyleSheets = []
+            }
+            return shadow
         }
         let root: ShadowRoot
         try {
@@ -316,19 +504,41 @@ export class Materializer {
         return root
     }
 
-    /** Creates one node, without its children; `parent` is where it goes. */
-    #single(node: SerializedNode, document: Document, parent: Node): Node | undefined {
+    /**
+     * Creates one node, without its children, or takes back the one from before; `parent` is where it goes, and
+     * `current` the level that puts it there, if any.
+     */
+    #single(node: SerializedNode, document: Document, parent: Node, current?: Level): Node | undefined {
         let created: Node
         switch (node.kind) {
             case NodeKind.Element:
                 return this.#element(node, document)
-            case NodeKind.Text:
-                created = document.createTextNode(this.#text(parent, node.data))
+            case NodeKind.Text: {
+                const data = this.#text(parent, node.data)
+                const old =
+                    this.#take(node, document, isText) ??
+                    (current === undefined ? undefined : this.#takeNext(current, isText, node.id))
+                if (old !== undefined) {
+                    return withData(old, data)
+                }
+                created = document.createTextNode(data)
                 break
-            case NodeKind.Comment:
+            }
+            case NodeKind.Comment: {
+                const old =
+                    this.#take(node, document, isComment) ??
+                    (current === undefined ? undefined : this.#takeNext(current, isComment, node.id))
+                if (old !== undefined) {
+                    return withData(old, node.data)
+                }
                 created = document.createComment(node.data)
                 break
-            case NodeKind.Doctype:
+            }
+            case NodeKind.Doctype: {
+                const old = this.#take(node, document, isDoctype)
+                if (old !== undefined) {
+                    return old
+                }
                 try {
                     created = document.implementation.createDocumentType(node.name, node.publicId, node.systemId)
                 } catch {
@@ -336,6 +546,7 @@ export class Materializer {
                     return undefined
                 }
                 break
+            }
             default:
                 return undefined
         }
@@ -343,21 +554,25 @@ export class Materializer {
         return created
     }
 
-    /** Creates an element with its attributes, without its children. */
+    /** Creates an element with its attributes, without its children, or gives the one from before its attributes. */
     #element(node: ElementNode, document: Document): Element {
-        const namespace = node.namespace
-        let element: Element
-        try {
-            element =
-                namespace === HTML_NAMESPACE
-                    ? document.createElement(node.tag)
-                    : document.createElementNS(namespace === '' ? null : namespace, node.tag)
-        } catch {
-            element = document.createElement(INVALID_TAG)
-        }
+        const old = this.#take(node, document, isElement)
+        const element = old ?? createElement(document, node)
         const attributes = node.attributes
+        let set = 0
         for (let i = 0; i < attributes.length; i += 2) {
-            this.#setAttribute(element, attributes[i]!, attributes[i + 1]!)
+            if (this.#setAttribute(element, attributes[i]!, attributes[i + 1]!)) {
+                set++
+            }
+        }
+        if (old !== undefined) {
+            if (old.attributes.length > set) {
+                removeOtherAttributes(old, attributes)
+            }
+            // At the top, as a new element would be.
+            if (this.#scrolled.delete(old)) {
+                this.#scrolls.set(old, { x: 0, y: 0, tries: 0 })
+            }
         }
         if (isScript(element)) {
             element.setAttribute('type', INERT_SCRIPT_TYPE)
@@ -368,26 +583,105 @@ export class Materializer {
                 state.basesChanged = true
             }
         }
-        this.#register(element, node.id)
+        if (old === undefined) {
+            this.#register(element, node.id)
+        }
         return element
     }
 
-    #setAttribute(element: Element, name: string, value: string | null): void {
+    /** Sets an attribute as recorded, unless it has that value already. Returns whether the element has it. */
+    #setAttribute(element: Element, name: string, value: string | null): boolean {
         const safe = sanitize(element, name, value)
         if (safe === null) {
             element.removeAttribute(name)
-            return
+            return false
+        }
+        const rewritten = this.#assets.rewrite(safe)
+        if (element.getAttribute(name) === rewritten) {
+            return true
         }
         const namespace = element.namespaceURI === HTML_NAMESPACE ? undefined : FOREIGN_ATTRIBUTES.get(name)
         try {
             if (namespace === undefined) {
-                element.setAttribute(name, this.#assets.rewrite(safe))
+                element.setAttribute(name, rewritten)
             } else {
-                element.setAttributeNS(namespace, name, this.#assets.rewrite(safe))
+                element.setAttributeNS(namespace, name, rewritten)
             }
+            return true
         } catch {
             // A name this browser's DOM does not accept, though a parser made it.
+            return false
         }
+    }
+
+    /** Takes back the node a recorded one had before the snapshot being built, if it can show it again. */
+    #take<T extends Node>(node: SerializedNode, document: Document, is: (node: Node) => node is T): T | undefined {
+        const old = this.#reusable(node, document)
+        if (old === undefined || !is(old)) {
+            return undefined
+        }
+        this.#old?.delete(node.id)
+        // Under the same id, which it keeps.
+        this.#nodes.set(node.id, old)
+        return old
+    }
+
+    /**
+     * The node a recorded one had before the snapshot being built, if it can show it again once given its
+     * attributes or data: a node of the same kind and name, in the same document, that holds nothing more.
+     */
+    #reusable(node: SerializedNode, document: Document): Node | undefined {
+        const old = this.#old?.get(node.id)
+        if (old === undefined || old.ownerDocument !== document) {
+            return undefined
+        }
+        switch (node.kind) {
+            case NodeKind.Element:
+                return isElement(old) &&
+                    old.localName === node.tag &&
+                    (old.namespaceURI ?? '') === node.namespace &&
+                    this.#holdsOnlyMarkup(old, node)
+                    ? old
+                    : undefined
+            case NodeKind.Text:
+                return isText(old) ? old : undefined
+            case NodeKind.Comment:
+                return isComment(old) ? old : undefined
+            case NodeKind.Doctype:
+                return isDoctype(old) &&
+                    old.name === node.name &&
+                    old.publicId === node.publicId &&
+                    old.systemId === node.systemId
+                    ? old
+                    : undefined
+            default:
+                // Shadow roots stay with their host, and documents with their frame.
+                return undefined
+        }
+    }
+
+    /**
+     * Whether an element from before holds no more than its recorded markup gives it, so it can stand for `node`:
+     * no value or selection of a form control, no rules changed in its sheet, no shadow root or frame document
+     * the recorded one does not have. Scripts are made anew too, never to run.
+     */
+    #holdsOnlyMarkup(element: Element, node: ElementNode): boolean {
+        if (
+            isInput(element) ||
+            isTextArea(element) ||
+            isSelect(element) ||
+            isHtml(element, 'option') ||
+            isScript(element) ||
+            this.#changedSheets.has(element)
+        ) {
+            return false
+        }
+        const shadow = element.shadowRoot
+        if (shadow !== null) {
+            const old = this.#old
+            return node.children.some(child => child.kind === NodeKind.ShadowRoot && old?.get(child.id) === shadow)
+        }
+        return !this.#frames.has(element) || node.children.some(child => child.kind === NodeKind.Document)
     }
 
     /** The text of a node in `parent`: the text of style sheets can point at recorded URLs. */
@@ -518,10 +812,14 @@ export class Materializer {
             return
         }
         const node = this.#nodes.get(event.id)
+        if (node === undefined || !isElement(node) || !isStyle(node)) {
+            return
+        }
         // None for a `<style>` that is not CSS, or out of the document.
-        const sheet = node !== undefined && isElement(node) && isStyle(node) ? node.sheet : null
+        const sheet = node.sheet
         if (sheet !== null) {
             changeRules(sheet, event.changes, this.#rewrite)
+            this.#changedSheets.add(node)
         }
     }
 
@@ -567,6 +865,9 @@ export class Materializer {
             // Deleted first, so positions keep the order they came in.
             this.#scrolls.delete(node)
             this.#scrolls.set(node, { x: position.x, y: position.y, tries: 0 })
+            if (position.x !== 0 || position.y !== 0) {
+                this.#scrolled.add(node)
+            }
         }
     }
 
@@ -592,7 +893,9 @@ export class Materializer {
 
     #setBaseUrl(state: DocumentState, href: string | undefined): void {
         const url = href === undefined ? state.url : (URL.parse(href, state.url)?.href ?? state.url)
-        state.base.setAttribute('href', url)
+        if (state.base.getAttribute('href') !== url) {
+            state.base.setAttribute('href', url)
+        }
     }
 
     /** Keeps the base element first in the head, or in the root element when there is no head. */
@@ -616,6 +919,49 @@ function openDocument(document: Document, quirks: boolean): void {
             '<meta name="referrer" content="no-referrer">'
     )
     document.close()
+}
+
+function level(parent: Node, children: readonly SerializedNode[], base: Node | undefined): Level {
+    return { parent, children, base, next: 0, last: null, indexes: undefined }
+}
+
+/** The first child of a level's parent after those it put in place. */
+function afterLast(current: Level): Node | null {
+    return current.last === null ? current.parent.firstChild : current.last.nextSibling
+}
+
+function createElement(document: Document, node: ElementNode): Element {
+    const namespace = node.namespace
+    try {
+        return namespace === HTML_NAMESPACE
+            ? document.createElement(node.tag)
+            : document.createElementNS(namespace === '' ? null : namespace, node.tag)
+    } catch {
+        return document.createElement(INVALID_TAG)
+    }
+}
+
+/** Removes the attributes of an element that are not among recorded ones. */
+function removeOtherAttributes(element: Element, attributes: readonly string[]): void {
+    const names = new Set<string>()
+    for (let i = 0; i < attributes.length; i += 2) {
+        names.add(attributes[i]!)
+    }
+    // From the end, as removing shifts those after.
+    const own = element.attributes
+    for (let i = own.length - 1; i >= 0; i--) {
+        const name = own[i]!.name
+        if (!names.has(name)) {
+            element.removeAttribute(name)
+        }
+    }
+}
+
+function withData(node: CharacterData, data: string): CharacterData {
+    if (node.data !== data) {
+        node.data = data
+    }
+    return node
 }
 
 /** The document a node belongs to: the node itself for a document. */

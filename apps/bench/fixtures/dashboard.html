@@ -71,7 +71,7 @@
         <script>
             // Mutation-heavy page. window.benchScenario.run(frames) performs a fixed amount of work per animation
             // frame, driven by a seeded PRNG so every run mutates the same nodes in the same order; step(frame) does
-            // one frame's work at once.
+            // one frame's work at once. With ?live=N, only the first N rows change, and the rest stays as it was.
             ;(() => {
                 const mulberry32 = seed => () => {
                     seed = (seed + 0x6d2b79f5) | 0
@@ -92,8 +92,9 @@
                     html.push('</tr>')
                 }
                 tbody.innerHTML = html.join('')
-                const rows = Array.from(tbody.rows)
-                const cells = Array.from(tbody.querySelectorAll('td'))
+                const live = Number(new URLSearchParams(location.search).get('live') ?? 200)
+                const rows = Array.from(tbody.rows).slice(0, live)
+                const cells = rows.flatMap(row => Array.from(row.cells).slice(1))
                 const pick = list => list[Math.floor(rand() * list.length)]
 
                 const step = frame => {

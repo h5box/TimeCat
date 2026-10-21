@@ -7,7 +7,7 @@ import {
     SheetChangeKind,
     SheetOwner
 } from '@timecat-js/protocol'
-import type { SheetChange, TcrEvent } from '@timecat-js/protocol'
+import type { SheetChange, SnapshotEvent, TcrEvent } from '@timecat-js/protocol'
 import * as fc from 'fast-check'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Assets } from '../src/assets.ts'
@@ -90,6 +90,26 @@ function framed(body: Spec[]): Spec {
         tag: 'iframe',
         children: [{ document: [{ tag: 'html', children: [{ tag: 'body', children: body }] }] }]
     }
+}
+
+/**
+ * A page with a node of each kind: body 5: div 6 (div 7), p 8 ("one" 9), input 10, style 11 ("p { color: red; }"
+ * 12), div 13 (#shadow-root 14 (span 15 ("shadow" 16))), iframe 17 (#document 18 (html 19 (body 20 ("framed" 21)))).
+ * Div 6 scrolls.
+ */
+function varied(): SnapshotEvent {
+    return pageOf([
+        {
+            tag: 'div',
+            attributes: ['class', 'box', 'style', 'height: 50px; overflow: auto'],
+            children: [{ tag: 'div', attributes: ['style', 'height: 500px'] }]
+        },
+        { tag: 'p', attributes: ['title', 'first'], children: [{ text: 'one' }] },
+        { tag: 'input' },
+        { tag: 'style', children: [{ text: 'p { color: red; }' }] },
+        { tag: 'div', children: [{ shadow: [{ tag: 'span', children: [{ text: 'shadow' }] }] }] },
+        framed([{ text: 'framed' }])
+    ])
 }
 
 function sheetEvent(owner: SheetOwner, id: number, ...changes: SheetChange[]): TcrEvent {
@@ -517,6 +537,78 @@ describe('Materializer', () => {
             }),
             { numRuns: 60 }
         )
+    })
+
+    it('builds a keyframe over any state it shows, and goes on from there as from the events before it', async () => {
+        const live = await setUp()
+        const seeking = await setUp()
+        fc.assert(
+            fc.property(operations(60), fc.nat(), (steps, split) => {
+                const events = recordingOf(steps).map(({ event }) => event)
+                const at = 1 + (split % events.length)
+                const reference = new VirtualDocument()
+                let keyframe: EncodedState | undefined
+                for (const [i, event] of events.entries()) {
+                    play(live.materializer, event)
+                    play(seeking.materializer, event)
+                    if (i < at) {
+                        reference.apply(event)
+                        keyframe = reference.encode(0)
+                    }
+                }
+                // Back to the keyframe from the end, and on to the end again.
+                restore(seeking.materializer, keyframe!)
+                for (const event of events.slice(at)) {
+                    play(seeking.materializer, event)
+                }
+                expect(describeReplay(seeking)).toBe(describeReplay(live))
+            }),
+            { numRuns: 60 }
+        )
+    })
+
+    it('takes back the nodes a snapshot shows again, as they would be built anew', async () => {
+        const replay = await setUp()
+        const { document, materializer } = replay
+        materializer.build(varied())
+        const ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
+        const before = new Map(ids.map(id => [id, materializer.node(id)]))
+        const base = document.head?.firstElementChild
+        const input = nodeOf(materializer, 10, isInputNode)
+        const style = nodeOf(materializer, 11, isStyleNode)
+        const box = nodeOf(materializer, 6, isScrollable)
+        materializer.apply({ type: EventType.Scroll, positions: [{ id: 6, x: 0, y: 100 }] })
+        materializer.flushScrolls()
+        expect(box.scrollTop).toBe(100)
+        const added = build({ tag: 'b', children: [{ text: 'new' }] }, { next: 22 })
+        materializer.apply(
+            mutations({
+                adds: [{ parentId: 5, beforeId: 8, nodes: [added] }],
+                attributes: [
+                    { id: 8, name: 'title', value: 'second' },
+                    { id: 8, name: 'class', value: 'added' }
+                ],
+                texts: [{ id: 9, data: 'two' }]
+            })
+        )
+        materializer.apply({ type: EventType.Input, changes: [{ kind: InputKind.Value, id: 10, value: 'typed' }] })
+        materializer.apply(
+            sheetEvent(SheetOwner.Node, 11, { kind: SheetChangeKind.Insert, index: 1, rule: 'b { color: blue; }' })
+        )
+
+        materializer.build(varied())
+        const fresh = await setUp()
+        fresh.materializer.build(varied())
+        expect(describeReplay(replay)).toBe(describeReplay(fresh))
+        expect(ids.filter(id => materializer.node(id) !== before.get(id))).toEqual([])
+        expect(document.head?.firstElementChild).toBe(base)
+        expect(document.querySelector('b')).toBeNull()
+        expect(materializer.node(22)).toBeUndefined()
+        // Form controls and sheets the CSSOM changed are made anew, and elements scroll back to the top.
+        expect(materializer.node(10)).not.toBe(input)
+        expect(materializer.node(11)).not.toBe(style)
+        expect(materializer.flushScrolls()).toBe(false)
+        expect(box.scrollTop).toBe(0)
     })
 
     it('builds shadow trees and the documents of frames, and changes them', async () => {

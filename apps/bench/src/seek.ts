@@ -9,6 +9,7 @@ import { FIXTURE_ORIGIN, serveFixtures } from './fixtures.ts'
 
 // Seek benchmark (RFC 0001: a seek anywhere in a one-hour session takes at most 300 ms). Records a long session
 // of the dashboard fixture on a simulated clock, then times seeks to random points of it, one after another.
+// Every row of the dashboard changes, unless --live-rows says how many do.
 
 const { values: args } = parseArgs({
     options: {
@@ -16,6 +17,7 @@ const { values: args } = parseArgs({
         fps: { type: 'string', default: '10' },
         seeks: { type: 'string', default: '100' },
         'keyframe-interval': { type: 'string' },
+        'live-rows': { type: 'string' },
         'cpu-throttle': { type: 'string', default: '1' }
     }
 })
@@ -25,6 +27,7 @@ const fps = Number(args.fps)
 const seekCount = Number(args.seeks)
 const keyframeInterval = args['keyframe-interval'] === undefined ? undefined : Number(args['keyframe-interval'])
 const cpuThrottle = Number(args['cpu-throttle'])
+const liveRows = args['live-rows'] === undefined ? undefined : Number(args['live-rows'])
 const TARGET_MS = 300
 
 const resultsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../results')
@@ -40,11 +43,12 @@ const environment = {
     minutes,
     fps,
     seeks: seekCount,
-    keyframeInterval: keyframeInterval ?? 'default'
+    keyframeInterval: keyframeInterval ?? 'default',
+    liveRows: liveRows ?? 'all'
 }
 console.log(
     `TimeCat seek bench | ${environment.browser} | ${environment.cpu} | CPU throttle ${cpuThrottle}x\n` +
-        `${minutes} min of dashboard updates at ${fps} frames/s, ${seekCount} seeks\n`
+        `${minutes} min of dashboard updates at ${fps} frames/s, ${liveRows ?? 'all'} rows live, ${seekCount} seeks\n`
 )
 
 let result
@@ -53,7 +57,8 @@ try {
     await serveFixtures(context)
     const page = await context.newPage()
     await page.addInitScript({ content: script })
-    await page.goto(`${FIXTURE_ORIGIN}/dashboard.html`, { waitUntil: 'load' })
+    const query = liveRows === undefined ? '' : `?live=${liveRows}`
+    await page.goto(`${FIXTURE_ORIGIN}/dashboard.html${query}`, { waitUntil: 'load' })
     const recorded = await page.evaluate(([m, f]) => window.timecatSeek!.record(m, f), [minutes, fps] as const)
     // Throttling starts after recording, which is not what is measured.
     if (cpuThrottle > 1) {

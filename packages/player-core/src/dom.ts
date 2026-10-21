@@ -8,6 +8,7 @@ const ELEMENT_NODE = 1
 const TEXT_NODE = 3
 const COMMENT_NODE = 8
 const DOCUMENT_NODE = 9
+const DOCUMENT_TYPE_NODE = 10
 const DOCUMENT_FRAGMENT_NODE = 11
 
 export function isElement(node: Node): node is Element {
@@ -20,6 +21,18 @@ export function isDocument(node: Node): node is Document {
 
 export function isShadowRoot(node: Node): node is ShadowRoot {
     return node.nodeType === DOCUMENT_FRAGMENT_NODE && 'host' in node
+}
+
+export function isText(node: Node): node is Text {
+    return node.nodeType === TEXT_NODE
+}
+
+export function isComment(node: Node): node is Comment {
+    return node.nodeType === COMMENT_NODE
+}
+
+export function isDoctype(node: Node): node is DocumentType {
+    return node.nodeType === DOCUMENT_TYPE_NODE
 }
 
 /** Text and comments, the nodes with data. */
