@@ -24,10 +24,14 @@ function start(options: PerfPluginOptions = {}) {
         window,
         now: () => time(performance.now()),
         time,
+        microseconds: at => Math.max(0, Math.round((at - origin) * 1000)),
         write(event: PluginEvent, at = 0) {
             if (event.type === EventType.Perf) {
                 events.push({ ...event, time: at })
             }
+        },
+        openMedia() {
+            throw new Error('plugins of this kind write no media')
         },
         nodeId: node => ids.get(node) ?? 0,
         onError: error => void errors.push(error)
@@ -35,7 +39,7 @@ function start(options: PerfPluginOptions = {}) {
     const stopPlugin = perfPlugin(options).start(context)
     const stop = (): void => {
         if (typeof stopPlugin === 'function') {
-            stopPlugin()
+            void stopPlugin()
         }
     }
     return { events, errors, ids, stop }

@@ -20,10 +20,14 @@ function start(options: NetworkPluginOptions = {}) {
         window,
         now: () => Math.round(performance.now()),
         time: time => Math.round(time),
+        microseconds: time => Math.round(time * 1000),
         write(event: PluginEvent, time = 0) {
             if (event.type === EventType.Network) {
                 events.push({ ...event, time })
             }
+        },
+        openMedia() {
+            throw new Error('plugins of this kind write no media')
         },
         nodeId: () => 0,
         onError: error => void errors.push(error)
@@ -32,7 +36,7 @@ function start(options: NetworkPluginOptions = {}) {
     let stopped = false
     const stop = (): void => {
         if (!stopped && typeof stopPlugin === 'function') {
-            stopPlugin()
+            void stopPlugin()
         }
         stopped = true
     }

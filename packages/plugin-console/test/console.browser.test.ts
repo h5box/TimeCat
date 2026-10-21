@@ -48,10 +48,14 @@ function start(view: Window & typeof globalThis, options: ConsolePluginOptions =
         window: view,
         now: () => clock,
         time: time => time,
+        microseconds: time => time * 1000,
         write(event: PluginEvent, time = clock) {
             if (event.type === EventType.Console) {
                 events.push({ ...event, time })
             }
+        },
+        openMedia() {
+            throw new Error('plugins of this kind write no media')
         },
         nodeId: () => 0,
         onError: error => void errors.push(error)
@@ -62,7 +66,7 @@ function start(view: Window & typeof globalThis, options: ConsolePluginOptions =
         errors,
         stop: (): void => {
             if (typeof stop === 'function') {
-                stop()
+                void stop()
             }
         },
         tick: (ms: number): void => {
