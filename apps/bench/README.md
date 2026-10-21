@@ -118,6 +118,24 @@ pointer-scroll 一行是另跑 21 轮的结果：9 轮时 TimeCat 的 overhead �
 - **长任务**仍然没有，start 仍在 7–13ms。
 - **主线程开销**：snapshot-large 是 rrweb 的 51%（M1 是 48%），pointer-scroll 61%（56%），typing 64%（84%），mutations 多 13%（多 9%）。overhead 是两个中位数相减，噪声大；比较稳定的是 script 比对照组多出的部分：mutations 里 TimeCat 229ms、rrweb 300ms（M1 是 220ms 和 346ms），pointer-scroll 里 44ms 和 141ms（M1 是 42ms 和 176ms）。TimeCat 的脚本时间和 M1 基本持平，M2 新增的录制在这些页面上没有带来可见的开销。
 
+### M3 复测（2026-10-21）
+
+M3 的录制器多了插件的媒体轨和实时流用的同步点（基准里不开插件，也不开 `onData`）。环境同上；snapshot-large 和 pointer-scroll 跑 9 轮，噪声大的 mutations 和 typing 分别跑 15 轮和 21 轮：
+
+| 场景 | 录制器 | start | overhead | long tasks（最长） | 事件数 | raw | gzip | serialize |
+|---|---|---|---|---|---|---|---|---|
+| snapshot-large | rrweb | 400.1 ms | 403.2 ms | 1（400 ms） | 2 | 6895 KB | 256.7 KB | 148.1 ms |
+| | TimeCat | 12.3 ms | 207.9 ms | 0 | 2 | 2945 KB | 64.9 KB | 0.2 ms |
+| mutations | rrweb | 35.9 ms | 246.3 ms | 0 | 302 | 953 KB | 126.5 KB | 10.6 ms |
+| | TimeCat | 12.6 ms | 303.6 ms | 0 | 302 | 135 KB | 63.5 KB | 0.1 ms |
+| typing | rrweb | 15.9 ms | 35.7 ms | 0 | 216 | 28 KB | 2.3 KB | 0.4 ms |
+| | TimeCat | 6.3 ms | 28.5 ms | 0 | 27 | 2.1 KB | 1.0 KB | 0.2 ms |
+| pointer-scroll | rrweb | 118.0 ms | 167.4 ms | 1（118 ms） | 35 | 1725 KB | 67.7 KB | 32.5 ms |
+| | TimeCat | 13.2 ms | 119.8 ms | 0 | 29 | 741 KB | 18.5 KB | 0.3 ms |
+
+- **数据量**和 M2 基本相同（typing 的事件数随按键合并的时机浮动），**长任务**仍然没有，start 仍在 6–14ms。
+- **主线程开销**：snapshot-large 是 rrweb 的 52%（M2 是 51%），pointer-scroll 72%（61%），typing 80%（64%），mutations 多 23%（多 13%）。比较稳定的 script 比对照组多出的部分：mutations 里 TimeCat 193ms、rrweb 254ms（M2 是 229ms 和 300ms），pointer-scroll 里 43ms 和 133ms（44ms 和 141ms），typing 里 18ms 和 28ms。TimeCat 的脚本时间没有变多。mutations 里 TimeCat 多出的主线程时间不在脚本里，M2 时也是这样。
+
 ### Canvas（M3，2026-10-21）
 
 环境同上，`pnpm bench --scenario canvas --runs 9`。300 帧约 5 秒，两个录制器都按 15 fps 录 Canvas：
