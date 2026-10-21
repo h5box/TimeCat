@@ -13,7 +13,7 @@ export interface RecordedData {
 }
 
 /** What a scenario asks of the recorders. */
-export interface StartOptions {
+interface StartOptions {
     canvas: boolean
 }
 
