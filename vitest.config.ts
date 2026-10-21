@@ -1,5 +1,6 @@
 import { playwright } from '@vitest/browser-playwright'
 import { defineConfig } from 'vitest/config'
+import { workerSource } from './scripts/worker-source.ts'
 
 const engines = ['chromium', 'firefox', 'webkit'] as const
 type Engine = (typeof engines)[number]
@@ -14,11 +15,14 @@ const browsers = (process.env.VITEST_BROWSERS ?? engines.join(',')).split(',').m
 })
 // Reuse a pre-installed Chromium instead of Playwright's pinned build when set.
 const chromiumPath = process.env.CHROMIUM_EXECUTABLE_PATH
+// Workspace packages resolve to their sources (see their `exports`), so tests need no build.
+const source = '@timecat-js/source'
 
 export default defineConfig({
     test: {
         projects: [
             {
+                ssr: { resolve: { conditions: [source, 'module', 'node', 'development|production'] } },
                 test: {
                     name: 'node',
                     include: ['packages/*/test/**/*.test.ts'],
@@ -27,6 +31,8 @@ export default defineConfig({
                 }
             },
             {
+                plugins: [workerSource()],
+                resolve: { conditions: [source, 'module', 'browser', 'development|production'] },
                 test: {
                     name: 'browser',
                     include: ['packages/*/test/**/*.test.ts'],

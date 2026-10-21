@@ -5,5 +5,12 @@
         "import": "*",
         "gzip": true,
         "limit": "6 kB"
+    },
+    {
+        "name": "@timecat-js/recorder (main thread)",
+        "path": "packages/recorder/dist/index.js",
+        "import": "{ record }",
+        "gzip": true,
+        "limit": "15 kB"
     }
 ]

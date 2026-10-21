@@ -82,6 +82,14 @@ export interface CommentNode {
 
 export type SerializedNode = DocumentNode | DoctypeNode | ElementNode | TextNode | CommentNode
 
+/** Flags at the start of a snapshot body. */
+export const SnapshotFlag = {
+    /** Every node header is followed by the node's id, and the body declares the next free id. */
+    ExplicitIds: 1,
+    /** The document renders in quirks mode. */
+    Quirks: 2
+} as const
+
 export interface SnapshotEvent {
     type: typeof EventType.Snapshot
     /** Document URL, which relative URLs in the snapshot resolve against. */

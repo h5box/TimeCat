@@ -1,0 +1,23 @@
+import type { SegmentInfo } from '@timecat-js/protocol'
+
+/** Where finished chunks are kept until the recording is exported. */
+export type StorageKind = 'memory' | 'opfs'
+
+/** Messages from the page to the pipeline. */
+export type Request =
+    | { type: 'init'; info: SegmentInfo; storage: StorageKind; stream: boolean }
+    /** Records written by `BatchWriter`. */
+    | { type: 'batch'; batch: Uint8Array<ArrayBuffer> }
+    /** Ends the open chunks, so storage has everything so far. */
+    | { type: 'flush' }
+    | { type: 'export'; id: number }
+    | { type: 'stop'; id: number }
+
+/** Messages from the pipeline to the page. */
+export type Response =
+    | { type: 'ready' }
+    /** The header or a chunk, in recording order; only when the init request asked to `stream`. */
+    | { type: 'data'; bytes: Uint8Array<ArrayBuffer> }
+    | { type: 'result'; id: number; blob: Blob }
+    | { type: 'failed'; id: number; error: unknown }
+    | { type: 'error'; error: unknown }

@@ -7,7 +7,7 @@ import {
     HAS_NAMESPACE,
     KIND_MASK
 } from './event-writer.ts'
-import { EventType, InputKind, Namespace, NodeKind, PointerAction, PointerType } from './events.ts'
+import { EventType, InputKind, Namespace, NodeKind, PointerAction, PointerType, SnapshotFlag } from './events.ts'
 import type {
     DocumentNode,
     ElementNode,
@@ -21,10 +21,7 @@ import { ByteReader } from './reader.ts'
 import { StringTableReader } from './strings.ts'
 import type { ByteWriter } from './writer.ts'
 
-/** Snapshot flags. */
-const EXPLICIT_IDS = 1
-const QUIRKS = 2
-const KNOWN_SNAPSHOT_FLAGS = EXPLICIT_IDS | QUIRKS
+const KNOWN_SNAPSHOT_FLAGS = SnapshotFlag.ExplicitIds | SnapshotFlag.Quirks
 
 /**
  * Allocates implicit node ids while decoding. It carries over from event to event: a snapshot resets it, and
@@ -40,11 +37,7 @@ export function encodeEvent(event: TcrEvent): Uint8Array<ArrayBuffer> {
     const bytes = w.bytes
     switch (event.type) {
         case EventType.Snapshot:
-            bytes.varuint((event.explicitIds ? EXPLICIT_IDS : 0) | (event.quirks ? QUIRKS : 0))
-            w.string(event.url)
-            if (event.explicitIds) {
-                bytes.varuint(event.nextId)
-            }
+            w.snapshotHeader(event.url, event.quirks, event.explicitIds ? event.nextId : undefined)
             writeTree(w, event.root, event.explicitIds)
             break
         case EventType.Mutations:
@@ -348,7 +341,7 @@ function readSnapshot(r: ByteReader, strings: StringTableReader, ids: IdCounter)
     if (flags & ~KNOWN_SNAPSHOT_FLAGS) {
         throw new TcrDecodeError(`unknown snapshot flags 0x${flags.toString(16)}`)
     }
-    const explicitIds = (flags & EXPLICIT_IDS) !== 0
+    const explicitIds = (flags & SnapshotFlag.ExplicitIds) !== 0
     const url = strings.read(r)
     const counter: IdCounter = { next: 1 }
     const declaredNextId = explicitIds ? r.varuint() : 0
@@ -358,7 +351,7 @@ function readSnapshot(r: ByteReader, strings: StringTableReader, ids: IdCounter)
     }
     const nextId = explicitIds ? declaredNextId : counter.next
     ids.next = nextId
-    return { type: EventType.Snapshot, url, quirks: (flags & QUIRKS) !== 0, explicitIds, nextId, root }
+    return { type: EventType.Snapshot, url, quirks: (flags & SnapshotFlag.Quirks) !== 0, explicitIds, nextId, root }
 }
 
 function readMutations(r: ByteReader, strings: StringTableReader, ids: IdCounter): MutationsEvent {

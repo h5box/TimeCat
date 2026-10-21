@@ -1,4 +1,4 @@
-import { NodeKind } from './events.ts'
+import { NodeKind, SnapshotFlag } from './events.ts'
 import { StringTableWriter } from './strings.ts'
 import { ByteWriter } from './writer.ts'
 
@@ -45,6 +45,18 @@ export class EventWriter {
     /** A string through the event's string table. */
     string(value: string, intern = true): void {
         this.#strings.write(this.bytes, value, intern)
+    }
+
+    /**
+     * Starts a snapshot body; the document tree follows. Pass `nextId` only for explicit ids, in which case every
+     * node method must be given its node's id.
+     */
+    snapshotHeader(url: string, quirks: boolean, nextId?: number): void {
+        this.bytes.varuint((nextId === undefined ? 0 : SnapshotFlag.ExplicitIds) | (quirks ? SnapshotFlag.Quirks : 0))
+        this.string(url)
+        if (nextId !== undefined) {
+            this.bytes.varuint(nextId)
+        }
     }
 
     document(hasChildren: boolean, id?: number): void {

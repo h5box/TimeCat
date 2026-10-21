@@ -28,6 +28,7 @@
         "oxlint": "catalog:",
         "oxlint-tsgolint": "catalog:",
         "playwright": "catalog:",
+        "rolldown": "catalog:",
         "size-limit": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:"

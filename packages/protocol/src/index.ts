@@ -15,7 +15,7 @@ export {
 export type { Chunk, FileHeader, SegmentInfo } from './container.ts'
 export { TcrDecodeError } from './errors.ts'
 export { EventWriter } from './event-writer.ts'
-export { EventType, InputKind, Namespace, NodeKind, PointerAction, PointerType } from './events.ts'
+export { EventType, InputKind, Namespace, NodeKind, PointerAction, PointerType, SnapshotFlag } from './events.ts'
 export type {
     AddedRun,
     AttributeChange,
