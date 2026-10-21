@@ -245,6 +245,19 @@ export class Capture implements EventListenerObject, Scope {
         return this.#assets.settled()
     }
 
+    /** Writes an event from elsewhere, such as a plugin, with the next changes. */
+    write(track: number, type: number, time: number, body: Uint8Array): void {
+        if (!this.#stopped) {
+            this.#sink.event(track, type, time, body)
+            this.#requestFlush()
+        }
+    }
+
+    /** The id of a recorded node, or 0. */
+    nodeId(node: Node): number {
+        return this.#ids.get(node) ?? 0
+    }
+
     /** Writes the last changes and detaches from the page. */
     stop(): void {
         if (this.#stopped) {

@@ -1,5 +1,13 @@
 import { decodeEvent, EventType, gunzip, readEventFrames } from '@timecat-js/protocol'
-import type { SnapshotEvent, TcrEvent, ViewportEvent } from '@timecat-js/protocol'
+import type {
+    ConsoleEvent,
+    CustomDataEvent,
+    NetworkEvent,
+    PerfEvent,
+    SnapshotEvent,
+    TcrEvent,
+    ViewportEvent
+} from '@timecat-js/protocol'
 import { Assets } from './assets.ts'
 import { Materializer } from './materializer.ts'
 import { pointerAt } from './pointer.ts'
@@ -39,6 +47,15 @@ export interface PlayerOptions {
     onError?: ((error: unknown) => void) | undefined
 }
 
+/** Something recorded beside the page: a console message, a request, a measurement or an application's event. */
+export type DataEvent = ConsoleEvent | NetworkEvent | PerfEvent | CustomDataEvent
+
+export interface TimedEvent {
+    /** When it happened, on the clock of `currentTime`. */
+    readonly time: number
+    readonly event: DataEvent
+}
+
 /**
  * Plays a recording in a sandboxed frame. Times are in milliseconds from the first recorded event. Dispatches
  * `play`, `pause`, `ended` and, while playing and after seeking, `timeupdate`.
@@ -59,6 +76,8 @@ export interface Player extends EventTarget {
     speed: number
     /** The replayed document, to look at: changing it breaks the replay. */
     readonly document: Document
+    /** Console messages, requests, measurements and events of the application, in time order. */
+    readonly events: readonly TimedEvent[]
     /** Plays from the current time, or from the start once ended. */
     play(): void
     pause(): void
@@ -137,6 +156,7 @@ class ReplayPlayer extends EventTarget implements Player {
     #retry = 0
     /** A keyframe being decompressed, after which the document catches up with `#time`. */
     #loading: Promise<void> | undefined
+    #events: readonly TimedEvent[] | undefined
     #destroyed = false
 
     constructor(timeline: Timeline, stage: Stage, speed: number, onError: (error: unknown) => void) {
@@ -197,6 +217,11 @@ class ReplayPlayer extends EventTarget implements Player {
 
     get document(): Document {
         return this.#document
+    }
+
+    get events(): readonly TimedEvent[] {
+        this.#events ??= readDataEvents(this.#timeline.index.data, this.#start)
+        return this.#events
     }
 
     play(): void {
@@ -447,6 +472,22 @@ function readEvents(payload: Uint8Array): TcrEvent[] {
         const event = decodeEvent(type, body, { next: 0 })
         if (event !== undefined) {
             events.push(event)
+        }
+    }
+    return events
+}
+
+function readDataEvents(payload: Uint8Array, start: number): TimedEvent[] {
+    const events: TimedEvent[] = []
+    for (const { type, time, body } of readEventFrames(payload, 0)) {
+        const event = decodeEvent(type, body, { next: 0 })
+        if (
+            event?.type === EventType.Console ||
+            event?.type === EventType.Network ||
+            event?.type === EventType.Perf ||
+            event?.type === EventType.Custom
+        ) {
+            events.push({ time: Math.max(0, time - start), event })
         }
     }
     return events

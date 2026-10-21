@@ -40,6 +40,7 @@ stream; `export()` returns the recording so far without stopping.
 | `sessionId` | random | Id shared by the segments of one session, such as the pages of one visit. |
 | `segment` | `0` | Index of this page load within the session. |
 | `meta` | `{}` | JSON data stored in the recording's header. |
+| `plugins` | none | Plugins that record more than the page, such as console messages (see [Plugins](#plugins)). |
 | `onData` | none | Receives the header, then each chunk as it is finished. |
 | `onError` | logs | Receives errors recording goes on after. |
 
@@ -49,9 +50,34 @@ stream; `export()` returns the recording so far without stopping.
 | --- | --- |
 | `sessionId` | The session's id. |
 | `ready` | Settles once the initial snapshot is written. |
+| `addEvent(name, data)` | Records an event of the application's own, such as a user signing in, with data that `JSON.stringify` takes; throws for data it does not. Players list these events with the plugins'. |
 | `flush()` | Writes pending changes and finishes the open chunks, so storage and `onData` have everything so far. Recording also flushes when the page is hidden. |
 | `export()` | The recording so far, as a `Blob`. Recording goes on. |
 | `stop()` | Stops recording and returns the whole recording, as a `Blob`. |
+
+## Plugins
+
+Plugins record what happens beside the page, each on a track of its own:
+
+| Package | Records |
+| --- | --- |
+| [`@timecat-js/plugin-console`](../plugin-console) | Console messages, uncaught errors and unhandled promise rejections. |
+| [`@timecat-js/plugin-network`](../plugin-network) | Requests made with `fetch`, `XMLHttpRequest` and `sendBeacon`, and the resources the page loads. |
+| [`@timecat-js/plugin-perf`](../plugin-perf) | LCP, CLS, INP, FCP, TTFB and long animation frames. |
+
+```ts
+import { consolePlugin } from '@timecat-js/plugin-console'
+import { networkPlugin } from '@timecat-js/plugin-network'
+
+const recorder = record({ plugins: [consolePlugin(), networkPlugin()] })
+```
+
+A plugin is an object with a `name` and a `start(context)` method, called right after recording starts, which
+returns a function that stops it, called when recording stops; that function can still write events, such as
+measurements that were not final. The context gives the window recorded, the recording's clock (`now()`, and
+`time()` for a `performance.now()` time such as a performance entry's), `write(event, time?)` for Console,
+Network, Perf and Custom events, `nodeId(node)` for the id a recorded node has in the recording, and `onError`.
+Errors a plugin throws as it starts or stops go to `onError`, and recording goes on.
 
 ## Privacy
 

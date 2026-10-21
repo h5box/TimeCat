@@ -48,6 +48,7 @@ to where it ends, and `player.warnings` says what was left out.
 | `play()`, `pause()` | Play from the current time, or from the start once ended. |
 | `seek(time)` | Resolves once the replay shows `time`, or a later time asked for meanwhile. |
 | `document` | The replayed document, to look at. Changing it breaks the replay. |
+| `events` | What was recorded beside the page, in time order: console messages, requests and performance measurements of the plugins, and the events of the application. Each is `{ time, event }`, with `time` on the clock of `currentTime`; `event.type` is one of `EventType.Console`, `Network`, `Perf` and `Custom`, which this package exports. |
 | `warnings` | Problems the recording was read despite. |
 | `destroy()` | Stops playing and removes the replay from its container. |
 

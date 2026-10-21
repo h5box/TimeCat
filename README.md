@@ -29,6 +29,9 @@ video, without capturing actual video frames.
 | [`@timecat-js/protocol`](./packages/protocol) | v0 draft: binary primitives, string tables, chunk container, event payloads |
 | [`@timecat-js/recorder`](./packages/recorder) | M1: time-sliced snapshots, coalesced changes, input (masked), pointer, scroll, viewport and navigation; compression and storage in a worker |
 | [`@timecat-js/player-core`](./packages/player-core) | M1: replay without UI, indexed in a worker, seeking through keyframes, in a sandbox |
+| [`@timecat-js/plugin-console`](./packages/plugin-console) | M2: console messages, uncaught errors and unhandled rejections |
+| [`@timecat-js/plugin-network`](./packages/plugin-network) | M2: requests made with `fetch`, XHR and `sendBeacon`, and the resources a page loads |
+| [`@timecat-js/plugin-perf`](./packages/plugin-perf) | M2: LCP, CLS, INP, FCP, TTFB and long animation frames |
 | `@timecat-js/player` | planned (M2): the player UI |
 
 [`apps/bench`](./apps/bench) measures TimeCat and rrweb on the same fixture pages, and seek time in a one-hour

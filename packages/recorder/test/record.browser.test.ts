@@ -2,7 +2,7 @@ import { EventType, NodeKind, Track } from '@timecat-js/protocol'
 import type { SerializedNode } from '@timecat-js/protocol'
 import { afterEach, describe, expect, it } from 'vitest'
 import { record } from '../src/index.ts'
-import type { RecordOptions } from '../src/index.ts'
+import type { PluginContext, RecordOptions } from '../src/index.ts'
 import { OPFS_DIRECTORY } from '../src/pipeline/storage.ts'
 import { decodeRecording, eventsOf } from './decode.ts'
 
@@ -165,5 +165,101 @@ describe('record', () => {
         expect(error).toMatchObject({ name: 'SyntaxError' })
         expect(() => record({ segment: -1 })).toThrow(RangeError)
         expect(() => record({ meta: { big: 1n } })).toThrow(TypeError)
+    })
+
+    it('records the events of the application', async () => {
+        const recorder = record({ worker: false })
+        await recorder.ready
+        recorder.addEvent('signed in', { user: 1 })
+        recorder.addEvent('ready')
+        expect(() => recorder.addEvent('broken', () => 0)).toThrow(TypeError)
+        const stopped = recorder.stop()
+        recorder.addEvent('late')
+        const events = eventsOf((await decodeRecording(await stopped)).events, EventType.Custom)
+        expect(events.map(({ name, data }) => ({ name, data }))).toEqual([
+            { name: 'signed in', data: '{"user":1}' },
+            { name: 'ready', data: 'null' }
+        ])
+    })
+
+    it('runs plugins while it records', async () => {
+        let context: PluginContext | undefined
+        const calls: string[] = []
+        const errors: unknown[] = []
+        const recorder = record({
+            worker: false,
+            onError: error => void errors.push(error),
+            plugins: [
+                {
+                    name: 'probe',
+                    start(given) {
+                        context = given
+                        calls.push('start')
+                        given.write({ type: EventType.Perf, metric: 'start', value: 1, targetId: 0 })
+                        return () => {
+                            calls.push('stop')
+                            given.write({ type: EventType.Perf, metric: 'stop', value: 2, targetId: 0 })
+                        }
+                    }
+                },
+                {
+                    name: 'broken',
+                    start() {
+                        throw new Error('no')
+                    }
+                },
+                {
+                    name: 'stuck',
+                    start: () => () => {
+                        throw new Error('stuck')
+                    }
+                }
+            ]
+        })
+        expect(calls).toEqual(['start'])
+        await recorder.ready
+        const probe = context!
+        expect(probe.window).toBe(window)
+        expect(probe.nodeId(document.body)).toBeGreaterThan(0)
+        expect(probe.nodeId(document.createElement('div'))).toBe(0)
+        expect(probe.time(performance.now())).toBe(probe.now())
+        expect(probe.time(0)).toBe(0)
+        probe.write({ type: EventType.Console, level: 3, source: 0, args: ['careful'], stack: 'at here' })
+        probe.write(
+            {
+                type: EventType.Network,
+                initiator: 'fetch',
+                method: 'GET',
+                url: '/x',
+                status: 200,
+                duration: 5,
+                size: 9,
+                error: ''
+            },
+            0
+        )
+        const stopped = recorder.stop()
+        expect(calls).toEqual(['start', 'stop'])
+        probe.write({ type: EventType.Perf, metric: 'late', value: 3, targetId: 0 })
+        const { events } = await decodeRecording(await stopped)
+        expect(eventsOf(events, EventType.Perf).map(event => event.metric)).toEqual(['start', 'stop'])
+        expect(eventsOf(events, EventType.Console)).toMatchObject([{ level: 3, args: ['careful'], stack: 'at here' }])
+        expect(eventsOf(events, EventType.Network)).toMatchObject([{ url: '/x', status: 200, duration: 5 }])
+        const tracks = new Set(
+            events
+                .filter(({ event }) => event.type >= EventType.Console)
+                .map(({ event, track }) => `${event.type}:${track}`)
+        )
+        expect(tracks).toEqual(
+            new Set([
+                `${EventType.Console}:${Track.Console}`,
+                `${EventType.Network}:${Track.Network}`,
+                `${EventType.Perf}:${Track.Perf}`
+            ])
+        )
+        expect(errors.map(error => (error instanceof Error ? error.message : error))).toEqual([
+            'plugin broken did not start',
+            'plugin stuck did not stop'
+        ])
     })
 })

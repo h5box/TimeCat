@@ -1,4 +1,5 @@
 import { EventType, PointerAction, PointerType } from '@timecat-js/protocol'
+import type { TcrEvent } from '@timecat-js/protocol'
 import * as fc from 'fast-check'
 import { afterEach, describe, expect, it } from 'vitest'
 import { isFrame } from '../src/dom.ts'
@@ -277,6 +278,27 @@ describe('createPlayer', () => {
         expect(click?.style.display).toBe('block')
         await player.seek(700)
         expect(click?.style.display).toBe('none')
+    })
+
+    it('lists the events recorded beside the page on its clock', async () => {
+        const early: TcrEvent = { type: EventType.Console, level: 3, source: 0, args: ['early'], stack: '' }
+        const ready: TcrEvent = { type: EventType.Custom, name: 'ready', data: '{"ok":true}' }
+        const lcp: TcrEvent = { type: EventType.Perf, metric: 'LCP', value: 180.5, targetId: 6 }
+        const player = await open(
+            writeRecording([
+                { time: 5, event: early },
+                { time: 10, event: story[0]!.event },
+                { time: 60, event: ready },
+                { time: 90, event: lcp }
+            ])
+        )
+        expect(player.events).toEqual([
+            { time: 0, event: early },
+            { time: 50, event: ready },
+            { time: 80, event: lcp }
+        ])
+        expect(player.events).toBe(player.events)
+        expect(player.duration).toBe(80)
     })
 
     it('rejects what it cannot play, and leaves the container as it was', async () => {

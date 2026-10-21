@@ -44,6 +44,13 @@ const EMPTY = new Uint8Array(0)
 
 /** Events that hold for the whole recording, whatever their time. */
 const STATIC_TYPES: ReadonlySet<number> = new Set([EventType.FontFace, EventType.Asset])
+/** Events recorded beside the page, which the replay does not apply. */
+const DATA_TYPES: ReadonlySet<number> = new Set([
+    EventType.Console,
+    EventType.Network,
+    EventType.Perf,
+    EventType.Custom
+])
 
 /**
  * Reads the segments of one session into a timeline index. Damage that a recording can survive, such as a
@@ -88,6 +95,7 @@ export async function buildIndex(sources: readonly SegmentSource[], options: Ind
         keyframes: await index.keyframes,
         pointer: index.pointer,
         statics: index.statics,
+        data: index.data,
         warnings
     }
 }
@@ -202,6 +210,8 @@ function indexFrames(frames: readonly Frame[], options: IndexOptions, warnings: 
     const ids: IdCounter = { next: 1 }
     const pointer = new PointerColumns()
     const statics = new ByteWriter()
+    const data = new ByteWriter()
+    let dataTime = 0
     let viewport: Keyframe['viewport']
     /** DOM events cannot be applied until the next snapshot, because an earlier one is missing. */
     let broken = false
@@ -232,6 +242,11 @@ function indexFrames(frames: readonly Frame[], options: IndexOptions, warnings: 
         }
         if (STATIC_TYPES.has(type)) {
             writeEventFrame(statics, type, 0, body)
+            continue
+        }
+        if (DATA_TYPES.has(type)) {
+            writeEventFrame(data, type, time - dataTime, body)
+            dataTime = time
             continue
         }
         if (event.type === EventType.Snapshot) {
@@ -289,6 +304,7 @@ function indexFrames(frames: readonly Frame[], options: IndexOptions, warnings: 
         keyframes: Promise.all(compressions).then(() => keyframes),
         pointer: pointer.finish(),
         statics: statics.finish(),
+        data: data.finish(),
         end
     }
 }

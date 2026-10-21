@@ -261,6 +261,37 @@ describe('buildIndex', () => {
         expect(index.end).toBe(60)
     })
 
+    it('keeps the events recorded beside the page apart, in time order', async () => {
+        const log: TcrEvent = { type: EventType.Console, level: 1, source: 0, args: ['hi'], stack: '' }
+        const request: TcrEvent = {
+            type: EventType.Network,
+            initiator: 'fetch',
+            method: 'GET',
+            url: 'https://example.com/',
+            status: 200,
+            duration: 12,
+            size: 0,
+            error: ''
+        }
+        const custom: TcrEvent = { type: EventType.Custom, name: 'ready', data: 'null' }
+        const index = await buildIndex(
+            [
+                writeRecording([
+                    { time: 0, event: page },
+                    { time: 70, event: custom },
+                    { time: 30, event: log },
+                    { time: 50, event: mutations({ texts: [{ id: 7, data: 'x' }] }) },
+                    { time: 30, event: request }
+                ])
+            ],
+            options
+        )
+        expect(typesOf(index)).toEqual([EventType.Snapshot, EventType.Mutations])
+        expect(readEventFrames(index.data, 0).map(({ time }) => time)).toEqual([30, 30, 70])
+        expect(eventsOf(index.data)).toEqual([log, request, custom])
+        expect(index.end).toBe(70)
+    })
+
     it('restores the sheets the CSSOM changed from keyframes, and counts their rules in the cost', async () => {
         // body 5: p 6 ("hello" 7), then a style 8 ("p {}" 9)
         const style = build({ tag: 'style', children: [{ text: 'p {}' }] }, { next: page.nextId })

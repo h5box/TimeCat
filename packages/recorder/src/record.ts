@@ -1,7 +1,10 @@
+import { encodeCustom, EventType, Track } from '@timecat-js/protocol'
 import { BatchWriter } from './batch.ts'
 import { afterTask, Capture, yieldToPage } from './capture.ts'
 import { PipelineClient } from './client.ts'
 import type { StorageKind } from './pipeline/messages.ts'
+import { startPlugins } from './plugins.ts'
+import type { RecorderPlugin } from './plugins.ts'
 import type { PrivacyOptions } from './privacy.ts'
 
 export interface RecordOptions extends PrivacyOptions {
@@ -30,6 +33,8 @@ export interface RecordOptions extends PrivacyOptions {
     segment?: number | undefined
     /** JSON-compatible data stored in the recording header. */
     meta?: Record<string, unknown> | undefined
+    /** Record more than the page, such as console messages (`@timecat-js/plugin-console`). */
+    plugins?: readonly RecorderPlugin[] | undefined
     /**
      * Receives the recording while it is written: the header, then each chunk as it is finished. Their
      * concatenation is a complete recording, so this can feed an upload or a live stream.
@@ -43,6 +48,11 @@ export interface Recorder {
     readonly sessionId: string
     /** Settles once the initial snapshot is written. */
     readonly ready: Promise<void>
+    /**
+     * Records an event of the application's own, such as a user signing in, with data that `JSON.stringify` takes.
+     * Throws when it does not. Does nothing once the recording stopped.
+     */
+    addEvent(name: string, data?: unknown): void
     /** Writes pending changes and finishes the open chunks, so storage and `onData` have everything so far. */
     flush(): void
     /** The recording so far, as a TCR file. Recording continues. */
@@ -99,10 +109,28 @@ export function record(options: RecordOptions = {}): Recorder {
         onError
     })
     const ready = capture.start()
+    const stopPlugins = startPlugins(options.plugins ?? [], {
+        window,
+        origin,
+        write: (track, type, time, body) => capture.write(track, type, time, body),
+        nodeId: node => capture.nodeId(node),
+        onError
+    })
     let stopped: Promise<Blob> | undefined
     return {
         sessionId,
         ready,
+        addEvent(name, data = null) {
+            // `undefined`, functions and symbols have no JSON text.
+            const json: unknown = JSON.stringify(data)
+            if (typeof json !== 'string') {
+                throw new TypeError(`the data of event ${name} has no JSON form`)
+            }
+            if (stopped === undefined) {
+                const time = Math.round(performance.now() - origin)
+                capture.write(Track.Custom, EventType.Custom, time, encodeCustom({ name, data: json }))
+            }
+        },
         flush() {
             capture.flush(true)
             client.flush()
@@ -114,6 +142,7 @@ export function record(options: RecordOptions = {}): Recorder {
             return client.export()
         },
         stop() {
+            stopPlugins()
             stopped ??= ready.then(async () => {
                 capture.flush(true)
                 await capture.settled()

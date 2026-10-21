@@ -10,7 +10,9 @@
         "name": "@timecat-js/recorder (loaded with the page)",
         "path": "packages/recorder/dist/index.js",
         "import": "{ record }",
-        "entry": ["index"],
+        "entry": [
+            "index"
+        ],
         "gzip": true,
         "limit": "15 kB"
     },
@@ -27,5 +29,26 @@
         "import": "{ createPlayer }",
         "gzip": true,
         "limit": "26 kB"
+    },
+    {
+        "name": "@timecat-js/plugin-console",
+        "path": "packages/plugin-console/dist/index.js",
+        "import": "{ consolePlugin }",
+        "gzip": true,
+        "limit": "3 kB"
+    },
+    {
+        "name": "@timecat-js/plugin-network",
+        "path": "packages/plugin-network/dist/index.js",
+        "import": "{ networkPlugin }",
+        "gzip": true,
+        "limit": "2 kB"
+    },
+    {
+        "name": "@timecat-js/plugin-perf",
+        "path": "packages/plugin-perf/dist/index.js",
+        "import": "{ perfPlugin }",
+        "gzip": true,
+        "limit": "2 kB"
     }
 ]

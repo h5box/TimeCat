@@ -1,0 +1,5 @@
+{
+    "extends": "../../tsconfig.base.json",
+    // The recorder's sources, which its types come from in this repository, import bundled worker scripts.
+    "include": ["src", "test", "../recorder/src/env.d.ts"]
+}

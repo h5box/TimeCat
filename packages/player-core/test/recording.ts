@@ -108,7 +108,11 @@ const TRACKS: Record<number, number> = {
     [EventType.StyleSheet]: Track.Dom,
     [EventType.AdoptedStyleSheets]: Track.Dom,
     [EventType.FontFace]: Track.Assets,
-    [EventType.Asset]: Track.Assets
+    [EventType.Asset]: Track.Assets,
+    [EventType.Console]: Track.Console,
+    [EventType.Network]: Track.Network,
+    [EventType.Perf]: Track.Perf,
+    [EventType.Custom]: Track.Custom
 }
 
 export const SESSION: SegmentInfo = { sessionId: 'player-test', segment: 0, startedAt: 1_760_000_000_000, meta: {} }

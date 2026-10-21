@@ -20,6 +20,11 @@ export interface TimelineIndex {
      * time, so `events` leaves them out.
      */
     statics: Uint8Array<ArrayBuffer>
+    /**
+     * Console, Network, Perf and Custom events, as an events chunk payload starting at time 0. The replay does not
+     * apply them, so `events` leaves them out.
+     */
+    data: Uint8Array<ArrayBuffer>
     /** Problems the recording was read despite, such as a truncated last chunk. */
     warnings: string[]
 }
@@ -102,7 +107,7 @@ export function transferables(index: TimelineIndex): ArrayBuffer[] {
         pointer.buttons.xs,
         pointer.buttons.ys
     ].map(array => array.buffer)
-    buffers.push(index.statics.buffer)
+    buffers.push(index.statics.buffer, index.data.buffer)
     for (const keyframe of index.keyframes) {
         buffers.push(keyframe.snapshot.buffer, keyframe.input.buffer, keyframe.scroll.buffer, keyframe.styles.buffer)
     }
