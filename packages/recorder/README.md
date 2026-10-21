@@ -89,9 +89,11 @@ positions in frames are converted to the page's viewport.
 **Style sheets, fonts and `blob:` content.** Changes that script makes to style sheets through the CSSOM are caught
 by wrapping `insertRule`, `deleteRule` and the other methods that change rules, in each realm. A sheet is written
 whole the first time, then as the top-level rules inserted and deleted; a rule changed inside, as by `setProperty`,
-is written as deleted and inserted again. A sheet is written whole again when that is no longer than its changes, or
-when changes made where no wrapper sees them leave the rules apart. `<style>` elements without text, whose rules
-script inserted as CSS-in-JS libraries do, are written whole with the snapshot. Constructed sheets are written once a
+is written as deleted and inserted again. A sheet is written whole again when that is no longer than its changes,
+when changes made where no wrapper sees them leave the rules apart, and when a change to the children of a `<style>`
+element whose sheet script changed makes the browser parse its text anew: the replay may never see that change, if
+it was undone before it was written. `<style>` elements without text, whose rules script inserted as CSS-in-JS
+libraries do, are written whole with the snapshot. Constructed sheets are written once a
 document or shadow root adopts them, which wrapping `adoptedStyleSheets` reports. Font faces that script makes and
 adds to a document's fonts are written with their source, URLs made absolute. The `blob:` URLs in what is written
 (attributes, style text, rules and font sources) are read in the background, once each, and written as assets that
@@ -114,14 +116,14 @@ Chrome and Edge 111, Firefox 115, Safari 16.4 and later.
 ## Limitations
 
 - Cross-origin frames are recorded empty, and canvas, video and audio content is not recorded.
-- Closed shadow roots attached before recording started, and closed declarative shadow roots, are not recorded:
-  nothing outside them can reach them.
+- Closed shadow roots attached before recording started or in a frame before its document was recorded, and
+  closed declarative shadow roots, are not recorded: nothing outside them can reach them.
 - Pointer positions in frames ignore CSS transforms of the frames.
 - `document.open()` on the page itself keeps the page's mode (quirks or standards) as the snapshot found it; frames
   are written anew in their new mode.
 - The sheets of `<style>` elements with text are taken to hold the rules of their text: CSSOM changes made to them
-  before recording started are not recorded. Changes made through the CSSOM to the sheets of `<link>` elements and
-  `@import` rules are not recorded.
+  before recording started, or in a frame before its document was recorded, are not recorded. Changes made through
+  the CSSOM to the sheets of `<link>` elements and `@import` rules are not recorded.
 - Changes to the declarations of rules through named properties, as `rule.style.color = 'red'`, are not recorded;
   `setProperty`, `removeProperty` and `cssText` are.
 - Script that keeps the array of `adoptedStyleSheets` and changes it in a later task is seen once script reads or

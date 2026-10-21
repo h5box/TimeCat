@@ -1,14 +1,23 @@
 // What a replay has to reproduce of a page, as text, so that the recorded page and its replay compare line by
-// line: the tree with every attribute, the state of form controls, scroll offsets, the viewport, the base URL and
-// the rendering mode. Nodes are checked by type, across realms: both documents live in frames.
+// line: the tree with every attribute, shadow trees and the documents of frames included, the state of form
+// controls, the rules of style sheets, scroll offsets, the viewport, the base URLs and the rendering modes. Nodes
+// are checked by type, across realms: both documents live in frames.
 
 /** Elements the player adds to the replayed document. */
 const PLAYER_ATTRIBUTE = 'data-timecat-player'
 const HTML = 'http://www.w3.org/1999/xhtml'
 const SVG = 'http://www.w3.org/2000/svg'
 const MATHML = 'http://www.w3.org/1998/Math/MathML'
+/**
+ * Attributes the player leaves out of frames, which would load a document, or keep the player out of the one it
+ * builds from the recording. That document is compared instead.
+ */
+const FRAME_SOURCES = new Set(['src', 'srcdoc', 'sandbox', 'csp'])
 
-export function describePage(document: Document): string {
+/** The shadow root of a host, closed ones included, which `shadowRoot` leaves out. */
+export type ShadowRootOf = (host: Element) => ShadowRoot | null
+
+export function describePage(document: Document, shadowRootOf: ShadowRootOf = openShadowRoot): string {
     const view = document.defaultView
     const lines = [
         `${document.compatMode} ${document.baseURI}`,
@@ -30,14 +39,34 @@ export function describePage(document: Document): string {
                 )
                 return
             case 9:
-                lines.push(`${indent}#document`)
+                // The page's mode and base URL are on the first line; those of frames' documents go here.
+                lines.push(
+                    `${indent}#document${node === document || !isDocument(node) ? '' : ` ${node.compatMode} ${node.baseURI}`}`
+                )
+                lines.push(...adopted(node, indent))
                 break
-            case 1:
+            case 11:
+                lines.push(`${indent}#shadow-root`, ...adopted(node, indent))
+                break
+            case 1: {
                 if (!isElement(node) || node.hasAttribute(PLAYER_ATTRIBUTE)) {
                     return
                 }
                 lines.push(`${indent}${describeElement(node)}`)
+                const sheet = isStyle(node) ? node.sheet : null
+                if (sheet !== null) {
+                    lines.push(`${indent}  @rules ${JSON.stringify(rulesOf(sheet))}`)
+                }
+                const shadow = shadowRootOf(node)
+                if (shadow !== null) {
+                    visit(shadow, depth + 1)
+                }
+                const content = isFrame(node) ? node.contentDocument : null
+                if (content !== null) {
+                    visit(content, depth + 1)
+                }
                 break
+            }
             default:
                 lines.push(`${indent}#node ${node.nodeType}`)
                 return
@@ -50,11 +79,26 @@ export function describePage(document: Document): string {
     return lines.join('\n')
 }
 
+function openShadowRoot(host: Element): ShadowRoot | null {
+    return host.shadowRoot
+}
+
+/** The rules of the sheets a document or shadow root adopts, as a line, if any. */
+function adopted(root: Node, indent: string): string[] {
+    const sheets = isDocument(root) || isShadowRoot(root) ? root.adoptedStyleSheets : []
+    return sheets.length === 0 ? [] : [`${indent}  @adopted ${JSON.stringify(sheets.map(rulesOf))}`]
+}
+
+function rulesOf(sheet: CSSStyleSheet): string[] {
+    return [...sheet.cssRules].map(rule => rule.cssText)
+}
+
 function describeElement(element: Element): string {
     const namespace = element.namespaceURI
     const prefix =
         namespace === HTML ? '' : namespace === SVG ? 'svg:' : namespace === MATHML ? 'math:' : `{${namespace}}`
     const attributes = [...element.attributes]
+        .filter(({ name }) => !(isFrame(element) && FRAME_SOURCES.has(name)))
         .map(
             ({ name, namespaceURI, value }) =>
                 `${name}${namespaceURI === null ? '' : `{${namespaceURI}}`}=${JSON.stringify(value)}`
@@ -94,6 +138,14 @@ function isDoctype(node: Node): node is DocumentType {
     return node.nodeType === 10
 }
 
+export function isDocument(node: Node): node is Document {
+    return node.nodeType === 9
+}
+
+export function isShadowRoot(node: Node): node is ShadowRoot {
+    return node.nodeType === 11 && 'host' in node
+}
+
 function isHtml(element: Element, localName: string): boolean {
     return element.localName === localName && element.namespaceURI === HTML
 }
@@ -112,4 +164,12 @@ export function isSelect(node: Node): node is HTMLSelectElement {
 
 export function isForm(node: Node): node is HTMLFormElement {
     return isElement(node) && isHtml(node, 'form')
+}
+
+export function isFrame(node: Node): node is HTMLIFrameElement | HTMLFrameElement {
+    return isElement(node) && (isHtml(node, 'iframe') || isHtml(node, 'frame'))
+}
+
+export function isStyle(node: Node): node is HTMLStyleElement | SVGStyleElement {
+    return isElement(node) && node.localName === 'style' && (node.namespaceURI === HTML || node.namespaceURI === SVG)
 }

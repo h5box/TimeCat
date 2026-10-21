@@ -54,6 +54,20 @@ export function containerOf(root: Node, top: Document): Element | null {
     return isDocument(root) && root !== top ? (root.defaultView?.frameElement ?? null) : null
 }
 
+/** `about:blank` and `about:srcdoc`, with or without a query or a fragment. */
+const ABOUT_URL = /^about:(?:blank|srcdoc)(?:[?#]|$)/
+
+/**
+ * The URL a recording gives `document`, which relative URLs in it resolve against, before its `<base>` elements:
+ * its own, or for the `about:blank` or `about:srcdoc` document of a frame, which has none to resolve against, the
+ * base URL of the frame's document, as browsers take it.
+ */
+export function documentUrl(document: Document): string {
+    const url = document.URL
+    const frame = ABOUT_URL.test(url) ? document.defaultView?.frameElement : null
+    return frame?.baseURI ?? url
+}
+
 /** Whether the recorder writes this kind of node at all. Processing instructions are left out. */
 export function isRecordable(node: Node): boolean {
     const type = node.nodeType

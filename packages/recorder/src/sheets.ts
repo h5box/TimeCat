@@ -38,13 +38,19 @@ const NOT_BLANK = /\S/
  * A sheet is written whole the first time, then as top-level rules inserted and deleted, in the order the hooks
  * report them. A rule whose content changed is written as deleted and inserted again. A `<style>` element's sheet
  * is taken to hold the rules of its text, as a replay that parses the text has, unless the element has no text:
- * then script inserted the rules, as CSS-in-JS libraries do, and they are written once the element is.
+ * then script inserted the rules, as CSS-in-JS libraries do, and they are written once the element is. A change
+ * to the children makes a new sheet, which is written whole if script had changed the old one: the replay may not
+ * see that change, when it was undone before it was written.
  */
 export class SheetRecorder {
     readonly #ids: NodeIds
     readonly #scope: Scope
     /** Top-level rules of the sheets written, as the replay has them. */
     readonly #rules = new WeakMap<CSSStyleSheet, CSSRule[]>()
+    /** The sheet each `<style>` element had when it was last written or its text changed. */
+    readonly #sheets = new WeakMap<HTMLStyleElement | SVGStyleElement, CSSStyleSheet>()
+    /** Sheets written whole with the rules of their element's text, which script has not changed since. */
+    readonly #parsed = new WeakSet<CSSStyleSheet>()
     readonly #changes = new Map<CSSStyleSheet, Changes>()
     /** Numbers of the constructed sheets written, by which the replay knows them. */
     readonly #numbers = new WeakMap<CSSStyleSheet, number>()
@@ -68,6 +74,7 @@ export class SheetRecorder {
      * otherwise, with no `index`.
      */
     sheetChanged(sheet: CSSStyleSheet, index?: number, deleted = false): void {
+        this.#parsed.delete(sheet)
         const changes = this.#changesOf(sheet)
         const ops = changes.ops
         if (ops === null) {
@@ -89,6 +96,7 @@ export class SheetRecorder {
         }
         const sheet = top.parentStyleSheet
         if (sheet !== null) {
+            this.#parsed.delete(sheet)
             this.#changesOf(sheet).rules.add(top)
         }
     }
@@ -119,8 +127,20 @@ export class SheetRecorder {
             }
         }
         const sheet = element.sheet
+        if (sheet === null) {
+            return
+        }
+        // The browser parses the text anew on any change to the children, even one undone before it is written,
+        // which the replay then never sees: the rules script changed in the old sheet would stay there.
+        const previous = this.#sheets.get(element)
+        const reparsed =
+            previous !== undefined && previous !== sheet && this.#rules.has(previous) && !this.#parsed.has(previous)
+        this.#sheets.set(element, sheet)
+        if (reparsed && !this.#changes.has(sheet)) {
+            this.#parsed.add(sheet)
+        }
         // A sheet written before, of an element written again, is written whole again: the replay parses the text.
-        if (sheet !== null && (this.#rules.delete(sheet) || (blank && sheet.cssRules.length > 0))) {
+        if (this.#rules.delete(sheet) || reparsed || (blank && sheet.cssRules.length > 0)) {
             this.#changesOf(sheet)
         }
     }

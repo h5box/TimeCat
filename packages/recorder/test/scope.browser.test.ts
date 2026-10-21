@@ -21,16 +21,13 @@ import {
 
 afterEach(closeSessions)
 
-/**
- * A decoded tree as indented lines; shadow roots and frame documents show as the first children of their hosts.
- * The URLs of frame documents show, which in these tests are `about:` ones, unlike the page's.
- */
+/** A decoded tree as indented lines; shadow roots and frame documents show as the first children of their hosts. */
 function outline(node: SerializedNode, depth = 0): string[] {
     const indent = '  '.repeat(depth)
     const below = (children: SerializedNode[]): string[] => children.flatMap(child => outline(child, depth + 1))
     switch (node.kind) {
         case NodeKind.Document:
-            return [`${indent}#document${node.url.startsWith('about:') ? ` ${node.url}` : ''}`, ...below(node.children)]
+            return [`${indent}#document`, ...below(node.children)]
         case NodeKind.ShadowRoot:
             return [`${indent}#shadow-root (${node.closed ? 'closed' : 'open'})`, ...below(node.children)]
         case NodeKind.Element: {
@@ -91,7 +88,7 @@ describe('recording shadow trees and frames', () => {
             '        <span>',
             '          "light"',
             '      <iframe id="frame" style="position: absolute; left: 50px; top: 30px; border: 2px solid; padding: 3px">',
-            '        #document about:blank',
+            '        #document',
             '          <html>',
             '            <head>',
             '            <body>',
@@ -186,7 +183,7 @@ describe('recording shadow trees and frames', () => {
         const [insert, load1, ...rest] = mutations
         expect(insert?.adds.flatMap(run => run.nodes.flatMap(node => outline(node)))).toEqual([
             '<iframe srcdoc="<p>loaded</p>">',
-            '  #document about:blank',
+            '  #document',
             '    <html>',
             '      <head>',
             '      <body>'
@@ -194,11 +191,7 @@ describe('recording shadow trees and frames', () => {
         const frameId = insert!.adds[0]!.nodes[0]!.id
         const blankId = frameId + 1
         expect(load1?.adds.map(run => [run.parentId, run.beforeId, run.nodes.flatMap(node => outline(node))])).toEqual([
-            [
-                frameId,
-                0,
-                ['#document about:srcdoc', '  <html>', '    <head>', '    <body>', '      <p>', '        "loaded"']
-            ]
+            [frameId, 0, ['#document', '  <html>', '    <head>', '    <body>', '      <p>', '        "loaded"']]
         ])
         const loadedId = load1!.adds[0]!.nodes[0]!.id
         expect(loadedId).toBeGreaterThan(blankId)
@@ -245,16 +238,9 @@ describe('recording shadow trees and frames', () => {
         const events = await finish(session)
         const mutations = eventsOf(events, EventType.Mutations)
         expect(mutations.map(event => event.adds.flatMap(run => run.nodes.flatMap(node => outline(node))))).toEqual([
-            [
-                '<iframe srcdoc="first">',
-                '  #document about:srcdoc',
-                '    <html>',
-                '      <head>',
-                '      <body>',
-                '        "first"'
-            ],
-            ['<iframe srcdoc="first">', '  #document about:blank', '    <html>', '      <head>', '      <body>'],
-            ['#document about:srcdoc', '  <html>', '    <head>', '    <body>', '      "first"'],
+            ['<iframe srcdoc="first">', '  #document', '    <html>', '      <head>', '      <body>', '        "first"'],
+            ['<iframe srcdoc="first">', '  #document', '    <html>', '      <head>', '      <body>'],
+            ['#document', '  <html>', '    <head>', '    <body>', '      "first"'],
             []
         ])
         const frameId = (snapshot: number): number => mutations[snapshot]!.adds[0]!.nodes[0]!.id
@@ -306,11 +292,13 @@ describe('recording shadow trees and frames', () => {
                 { kind: 1, id: idOf(root, withId('r1')), checked: false }
             ])
         )
-        const frameDocument = idOf(root, node => node.kind === NodeKind.Document && node.url === 'about:blank')
+        const frameDocument = idOf(root, node => node.kind === NodeKind.Document && node !== root)
         const positions = eventsOf(events, EventType.Scroll).flatMap(event => event.positions)
         expect(positions).toContainEqual({ id: frameDocument, x: 0, y: 120 })
-        const navigations = eventsOf(events, EventType.Navigation)
-        expect(navigations.map(event => [event.id, event.url])).toEqual([[frameDocument, 'about:blank#there']])
+        // The frame's `about:blank` document is recorded with the URL its relative URLs resolve against, the page's,
+        // which a fragment does not change.
+        expect(find(root, node => node.id === frameDocument)).toMatchObject({ url: page.baseURI })
+        expect(eventsOf(events, EventType.Navigation)).toEqual([])
     })
 
     it('places pointer events in frames in the page viewport, and targets nodes in shadow trees', async () => {
@@ -341,10 +329,12 @@ describe('recording shadow trees and frames', () => {
         content.close()
         session.flush()
         byId(content, 'written').dispatchEvent(new PointerEvent('pointerdown', { isPrimary: true, bubbles: true }))
+        // The opened document has the URL of the document that opened it, which navigates on its own.
+        content.defaultView!.history.pushState(null, '', '#moved')
         session.flush()
         const events = await finish(session)
         const root = snapshotRoot(events)
-        const blank = find(root, node => node.kind === NodeKind.Document && node.url === 'about:blank')
+        const blank = find(root, node => node.kind === NodeKind.Document && node !== root)
         expect(blank?.kind === NodeKind.Document && blank.quirks).toBe(true)
         const [opened] = eventsOf(events, EventType.Mutations)
         expect(opened?.removes).toContain(blank?.id)
@@ -357,6 +347,9 @@ describe('recording shadow trees and frames', () => {
         ])
         const written = document === undefined ? undefined : find(document, withId('written'))
         expect(eventsOf(events, EventType.PointerButton).map(event => event.targetId)).toEqual([written?.id])
+        expect(eventsOf(events, EventType.Navigation).map(event => [event.id, event.url])).toEqual([
+            [document?.id, new URL('#moved', location.href).href]
+        ])
     })
 
     it('finds declarative shadow roots that the parser attaches to hosts already recorded', async () => {

@@ -11,6 +11,7 @@ import { AssetRecorder } from './assets.ts'
 import type { EventSink } from './batch.ts'
 import {
     containerOf,
+    documentUrl,
     HTML_NAMESPACE,
     isDocument,
     isForm,
@@ -127,8 +128,8 @@ export class Capture implements EventListenerObject, Scope {
     readonly #closedRoots = new WeakMap<Element, ShadowRoot>()
     /** Frames written, with the document written as their content, or null for none. */
     readonly #frames = new Map<HTMLIFrameElement | HTMLFrameElement, Document | null>()
-    /** URL last recorded of each document. */
-    readonly #urls = new Map<Document, string>()
+    /** URL of each document when last looked at, and the URL last recorded for it, see `documentUrl`. */
+    readonly #urls = new Map<Document, { url: string; recorded: string }>()
     /** The mode each document was written in, which `document.open()` sets anew. */
     readonly #modes = new WeakMap<Document, string>()
     /** Where the viewports of frames' documents are in the page's viewport, until the layout may change. */
@@ -193,7 +194,7 @@ export class Capture implements EventListenerObject, Scope {
 
     enter(root: InnerRoot): void {
         if (isDocument(root)) {
-            this.#urls.set(root, root.URL)
+            this.#urls.set(root, { url: root.URL, recorded: documentUrl(root) })
             this.#modes.set(root, root.compatMode)
             // A document can be scrolled by the time it is written.
             this.#scroll.mark(root)
@@ -509,16 +510,21 @@ export class Capture implements EventListenerObject, Scope {
 
     /** Writes the same-document navigations of the page and its frames. */
     #writeNavigations(time: number): void {
-        for (const [document, url] of this.#urls) {
+        for (const [document, last] of this.#urls) {
             if (!this.contains(document)) {
                 this.#urls.delete(document)
                 continue
             }
-            const current = document.URL
             const id = this.#ids.get(document)
-            if (current !== url && id !== undefined) {
-                this.#urls.set(document, current)
-                this.#sink.event(Track.Navigation, EventType.Navigation, time, encodeNavigation({ id, url: current }))
+            if (document.URL === last.url || id === undefined) {
+                continue
+            }
+            last.url = document.URL
+            // A fragment of its own does not change what the URLs of an `about:blank` frame resolve against.
+            const url = documentUrl(document)
+            if (url !== last.recorded) {
+                last.recorded = url
+                this.#sink.event(Track.Navigation, EventType.Navigation, time, encodeNavigation({ id, url }))
             }
         }
     }

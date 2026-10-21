@@ -151,6 +151,29 @@ describe('recording style sheets', () => {
         ])
     })
 
+    it('writes a sheet whole when its text is parsed anew after script changed it', async () => {
+        const session = await Session.open({
+            html: '<!DOCTYPE html><head><style id="s">p { color: red; }</style></head><body></body>'
+        })
+        const page = session.document
+        const style = byId(page, 's')
+        sheetOf(style).insertRule('a { color: blue; }')
+        session.flush()
+        // Any change to the children parses the text anew, which drops the rule inserted, even a change undone
+        // before it is written, which the replay never sees.
+        style.append(page.createComment('gone'))
+        style.lastChild?.remove()
+        session.flush()
+        // The replay has the rules of the text again, and parses a new text as the page does.
+        style.append('b { color: green; }')
+        session.flush()
+        const events = await finish(session)
+        expect(sheetEvents(events).map(([, , changes]) => changes)).toEqual([
+            [replace('a { color: blue; }', 'p { color: red; }')],
+            [replace('p { color: red; }')]
+        ])
+    })
+
     it('records constructed sheets, and the documents and shadow roots that adopt them', async () => {
         const session = await Session.open({
             html: '<!DOCTYPE html><body><div id="host"></div></body>',

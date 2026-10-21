@@ -1,6 +1,7 @@
 import type { EventWriter } from '@timecat-js/protocol'
 import { findBlobUrls } from './assets.ts'
 import {
+    documentUrl,
     HTML_NAMESPACE,
     isComment,
     isDoctype,
@@ -203,7 +204,7 @@ export class TreeWriter {
         this.#ids.assign(root)
         const first = root.firstChild
         if (isDocument(root)) {
-            this.#writer.document(root.URL, root.compatMode === 'BackCompat', first !== null)
+            this.#writer.document(documentUrl(root), root.compatMode === 'BackCompat', first !== null)
         } else {
             this.#writer.shadowRoot(root.mode === 'closed', first !== null)
         }

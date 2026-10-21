@@ -20,6 +20,8 @@ export interface SessionOptions extends PrivacyOptions {
     betweenSlices?: (document: Document, slice: number) => void
     checkEvery?: number
     assetBudget?: number
+    /** Where the test keeps the closed shadow roots it attaches, when it does before the session is open. */
+    closedRoots?: Map<Element, ShadowRoot>
 }
 
 /** What the recorded page showed at a time. */
@@ -47,6 +49,8 @@ export class Session {
     readonly document: Document
     readonly errors: unknown[] = []
     readonly checkpoints: Checkpoint[] = []
+    /** Closed shadow roots the test attached, which the description of the page cannot find on its own. */
+    readonly closedRoots: Map<Element, ShadowRoot>
     readonly #capture: Capture
     readonly #pipeline: Pipeline
     readonly #parts: Uint8Array[] = []
@@ -56,6 +60,7 @@ export class Session {
     private constructor(frame: HTMLIFrameElement, window: Window, options: SessionOptions) {
         this.frame = frame
         this.document = window.document
+        this.closedRoots = options.closedRoots ?? new Map()
         const onError = (error: unknown): void => void this.errors.push(error)
         this.#pipeline = new Pipeline(
             { sessionId: 'fidelity', segment: 0, startedAt: 1_760_000_000_000, meta: {} },
@@ -126,8 +131,19 @@ export class Session {
     /** Flushes, notes what the page shows, and moves the clock on so that later changes come after. */
     checkpoint(): void {
         this.flush()
-        this.checkpoints.push({ time: this.#time, state: describePage(this.document) })
+        const state = describePage(this.document, host => host.shadowRoot ?? this.closedRoots.get(host) ?? null)
+        this.checkpoints.push({ time: this.#time, state })
         this.#time++
+    }
+
+    /**
+     * Like `checkpoint`, with what `describe` says the page shows, which may wait for what loads, such as images.
+     * Changes made meanwhile come after the checkpoint.
+     */
+    async checkpointAs(describe: Describe): Promise<void> {
+        this.flush()
+        const time = this.#time++
+        this.checkpoints.push({ time, state: await describe(this.document) })
     }
 
     /** Stops recording, once the content of `blob:` URLs is read, and returns the recording. */
@@ -150,6 +166,9 @@ export class Session {
     }
 }
 
+/** Says what a page shows, as `describePage` does or in a way of a test's own. */
+export type Describe = (document: Document) => string | Promise<string>
+
 /**
  * Plays a recording, seeks to the times given, in their order, and describes what the replay shows at each.
  * Small keyframe intervals make seeks go through keyframes the player wrote itself.
@@ -157,7 +176,8 @@ export class Session {
 export async function replay(
     recording: Uint8Array,
     times: readonly number[],
-    keyframeInterval: number
+    keyframeInterval: number,
+    describe: Describe = describePage
 ): Promise<string[]> {
     const container = document.createElement('div')
     container.style.cssText = 'width: 320px; height: 240px'
@@ -169,7 +189,8 @@ export async function replay(
         for (const time of times) {
             // oxlint-disable-next-line no-await-in-loop -- each seek starts where the last one ended
             await player.seek(time)
-            states.push(describePage(player.document))
+            // oxlint-disable-next-line no-await-in-loop -- the replay has to stay at this time meanwhile
+            states.push(await describe(player.document))
         }
         if (errors.length > 0 || player.warnings.length > 0) {
             states.push(`errors: ${String(errors)}; warnings: ${player.warnings.join(', ')}`)
