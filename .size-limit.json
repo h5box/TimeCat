@@ -10,9 +10,7 @@
         "name": "@timecat-js/recorder (loaded with the page)",
         "path": "packages/recorder/dist/index.js",
         "import": "{ record }",
-        "entry": [
-            "index"
-        ],
+        "entry": ["index"],
         "gzip": true,
         "limit": "15 kB"
     },
