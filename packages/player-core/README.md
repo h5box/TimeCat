@@ -1,8 +1,8 @@
 # @timecat-js/player-core
 
 The TimeCat replay engine: it indexes a recording, seeks anywhere in it through keyframes and rebuilds the recorded
-page in a sandboxed frame where no recorded script can run. It has no UI of its own; `@timecat-js/player` (M2) adds
-controls on top.
+page in a sandboxed frame where no recorded script can run. It has no UI of its own; [`@timecat-js/player`](../player)
+adds controls on top.
 
 > Pre-release. The API and the recording format may change without notice until 1.0.
 

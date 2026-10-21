@@ -1,0 +1,72 @@
+{
+    "name": "@timecat-js/player",
+    "version": "0.0.0",
+    "description": "TimeCat player: the <timecat-player> element, with controls, a timeline and the events recorded beside the page, and export of a recording as a single HTML file",
+    "keywords": [
+        "player",
+        "session-replay",
+        "timecat",
+        "web-component"
+    ],
+    "homepage": "https://github.com/h5box/TimeCat/tree/master/packages/player#readme",
+    "bugs": "https://github.com/h5box/TimeCat/issues",
+    "license": "GPL-3.0-or-later",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/h5box/TimeCat.git",
+        "directory": "packages/player"
+    },
+    "files": [
+        "dist"
+    ],
+    "type": "module",
+    "sideEffects": [
+        "./src/index.ts",
+        "./dist/index.js"
+    ],
+    "exports": {
+        ".": {
+            "@timecat-js/source": "./src/index.ts",
+            "default": "./dist/index.js"
+        },
+        "./export": {
+            "@timecat-js/source": "./src/export.ts",
+            "default": "./dist/export.js"
+        },
+        "./package.json": "./package.json",
+        "./standalone": {
+            "types": "./dist/timecat-player.d.ts",
+            "default": "./dist/timecat-player.js"
+        }
+    },
+    "publishConfig": {
+        "exports": {
+            ".": "./dist/index.js",
+            "./export": "./dist/export.js",
+            "./package.json": "./package.json",
+            "./standalone": {
+                "types": "./dist/timecat-player.d.ts",
+                "default": "./dist/timecat-player.js"
+            }
+        }
+    },
+    "scripts": {
+        "build": "tsdown",
+        "typecheck": "tsc -p .",
+        "prepack": "node -e \"require('node:fs').copyFileSync('../../LICENSE', 'LICENSE')\""
+    },
+    "dependencies": {
+        "@timecat-js/player-core": "workspace:^",
+        "@timecat-js/protocol": "workspace:^",
+        "lit": "catalog:"
+    },
+    "devDependencies": {
+        "@arethetypeswrong/core": "catalog:",
+        "@timecat-js/plugin-console": "workspace:^",
+        "@timecat-js/recorder": "workspace:^",
+        "publint": "catalog:",
+        "tsdown": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:"
+    }
+}

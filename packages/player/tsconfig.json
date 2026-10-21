@@ -1,0 +1,5 @@
+{
+    "extends": "../../tsconfig.base.json",
+    // The sources of the packages it bundles from this repository import bundled worker scripts.
+    "include": ["src", "test", "../recorder/src/env.d.ts"]
+}

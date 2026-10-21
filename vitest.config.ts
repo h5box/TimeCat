@@ -31,7 +31,7 @@ export default defineConfig({
                 }
             },
             {
-                plugins: [workerSource()],
+                plugins: [workerSource(), workerSource({ query: '?script-source' })],
                 resolve: { conditions: [source, 'module', 'browser', 'development|production'] },
                 test: {
                     name: 'browser',

@@ -48,5 +48,27 @@
         "import": "{ perfPlugin }",
         "gzip": true,
         "limit": "2 kB"
+    },
+    {
+        "name": "@timecat-js/player (the element with Lit, player-core aside)",
+        "path": "packages/player/dist/index.js",
+        "import": "{ TimecatPlayer }",
+        "ignore": ["@timecat-js/player-core", "@timecat-js/protocol"],
+        "gzip": true,
+        "limit": "13 kB"
+    },
+    {
+        "name": "@timecat-js/player/standalone (one script with all it needs)",
+        "path": "packages/player/dist/timecat-player.js",
+        "gzip": true,
+        "limit": "35 kB"
+    },
+    {
+        "name": "@timecat-js/player/export (the standalone script loaded on demand, included)",
+        "path": "packages/player/dist/export.js",
+        "import": "{ exportHtml }",
+        "ignore": ["@timecat-js/protocol"],
+        "gzip": true,
+        "limit": "36 kB"
     }
 ]

@@ -32,7 +32,7 @@ video, without capturing actual video frames.
 | [`@timecat-js/plugin-console`](./packages/plugin-console) | M2: console messages, uncaught errors and unhandled rejections |
 | [`@timecat-js/plugin-network`](./packages/plugin-network) | M2: requests made with `fetch`, XHR and `sendBeacon`, and the resources a page loads |
 | [`@timecat-js/plugin-perf`](./packages/plugin-perf) | M2: LCP, CLS, INP, FCP, TTFB and long animation frames |
-| `@timecat-js/player` | planned (M2): the player UI |
+| [`@timecat-js/player`](./packages/player) | M2: `<timecat-player>`, with controls, a timeline marking errors and a panel of the events recorded beside the page; export of a recording as one HTML file |
 
 [`apps/bench`](./apps/bench) measures TimeCat and rrweb on the same fixture pages, and seek time in a one-hour
 recording.

@@ -27,7 +27,7 @@ TimeCat 录制网页里发生的一切，包括 DOM 变化、输入、滚动和�
 | [`@timecat-js/plugin-console`](./packages/plugin-console) | M2：控制台消息、未捕获的错误和未处理的 Promise 拒绝 |
 | [`@timecat-js/plugin-network`](./packages/plugin-network) | M2：`fetch`、XHR 和 `sendBeacon` 发出的请求，以及页面加载的资源 |
 | [`@timecat-js/plugin-perf`](./packages/plugin-perf) | M2：LCP、CLS、INP、FCP、TTFB 和长动画帧 |
-| `@timecat-js/player` | 计划中（M2）：播放器界面 |
+| [`@timecat-js/player`](./packages/player) | M2：`<timecat-player>` 组件，带播放控制、标出错误的时间轴和页面之外录到的事件面板；可把录像导出为单个 HTML 文件 |
 
 [`apps/bench`](./apps/bench) 在同一批夹具页面上测量 TimeCat 和 rrweb，并测量一小时录像里的 seek 耗时。
 
