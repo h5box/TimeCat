@@ -1,11 +1,21 @@
 import { ByteWriter, EventWriter } from '@timecat-js/protocol'
-import { HTML_NAMESPACE, isComment, isElement, isInput, isRecordable, isText, recordsChildren } from './dom.ts'
+import {
+    HTML_NAMESPACE,
+    isComment,
+    isDocument,
+    isElement,
+    isInput,
+    isRecordable,
+    isShadowRoot,
+    isText,
+    recordsChildren
+} from './dom.ts'
 import type { FormControl } from './dom.ts'
 import type { NodeIds } from './ids.ts'
-import { applyTextMask, maskValue, TextMask } from './privacy.ts'
+import { applyTextMask, maskValue } from './privacy.ts'
 import type { Privacy } from './privacy.ts'
 import { TreeWriter } from './tree.ts'
-import type { SnapshotGuard } from './tree.ts'
+import type { Scope, SnapshotGuard } from './tree.ts'
 
 /** Prefix of attribute keys that carry a namespace; NUL cannot occur in attribute names. */
 const NAMESPACED = '\0'
@@ -13,7 +23,8 @@ const NAMESPACED = '\0'
 /**
  * Mutation records reduced to what changed: which nodes were removed or inserted, which attributes and texts
  * changed. Records only say that something changed; the current state is read when the batch is written, so
- * many changes to one node between two flushes cost one entry.
+ * many changes to one node between two flushes cost one entry. Shadow roots attached to recorded hosts, and
+ * documents that frames loaded, count as inserted too.
  */
 export class MutationBuffer implements SnapshotGuard {
     generation = 0
@@ -78,15 +89,17 @@ const PREFIXES: Record<string, string> = {
 export class MutationWriter {
     readonly #ids: NodeIds
     readonly #privacy: Privacy
+    readonly #scope: Scope
     readonly #writer = new EventWriter()
     readonly #tree: TreeWriter
     readonly #body = new ByteWriter(256)
     readonly #run: Node[] = []
 
-    constructor(ids: NodeIds, privacy: Privacy) {
+    constructor(ids: NodeIds, privacy: Privacy, scope: Scope) {
         this.#ids = ids
         this.#privacy = privacy
-        this.#tree = new TreeWriter(this.#writer, ids, privacy)
+        this.#scope = scope
+        this.#tree = new TreeWriter(this.#writer, ids, privacy, scope)
     }
 
     /** Form controls the last `write` added, whose current state the input track adds. */
@@ -94,29 +107,41 @@ export class MutationWriter {
         return this.#tree.controls
     }
 
+    /** Scrolled elements of the documents the last `write` added. */
+    get scrolled(): Element[] {
+        return this.#tree.scrolled
+    }
+
     /** Returns undefined when no recorded node changed. */
     write(buffer: MutationBuffer): Uint8Array<ArrayBuffer> | undefined {
         const ids = this.#ids
         const privacy = this.#privacy
+        const scope = this.#scope
         const writer = this.#writer
         const tree = this.#tree
         // Ids from here on are given to nodes written by this batch.
         const batchStart = ids.next
         writer.reset()
         tree.controls.length = 0
+        tree.scrolled.length = 0
 
+        const added = buffer.added
         const removes: number[] = []
         for (const node of buffer.removed) {
             const id = ids.get(node)
             if (id !== undefined) {
                 removes.push(id)
                 ids.delete(node)
+                // A node can move into a tree whose changes are not observed yet: a shadow root or a frame's
+                // document that a snapshot has yet to reach, or that a frame just loaded. It is inserted anew.
+                if (!added.has(node) && scope.contains(node)) {
+                    added.add(node)
+                }
             }
         }
 
         // An inserted node is pending until this batch writes it. Its id, if any, is a stale one from a
         // subtree that was detached earlier.
-        const added = buffer.added
         const pending = (node: Node): boolean => {
             if (!added.has(node)) {
                 return false
@@ -127,17 +152,17 @@ export class MutationWriter {
         let runs = 0
         const run = this.#run
         for (const node of added) {
-            if (!pending(node) || !node.isConnected) {
+            if (!pending(node) || !scope.contains(node)) {
                 continue
             }
             // Write the outermost pending node, which takes everything inserted below it along.
             let top = node
-            for (let ancestor = node.parentNode; ancestor !== null; ancestor = ancestor.parentNode) {
+            for (let ancestor = scope.parent(node); ancestor !== null; ancestor = scope.parent(ancestor)) {
                 if (pending(ancestor)) {
                     top = ancestor
                 }
             }
-            const parent = top.parentNode
+            const parent = scope.parent(top)
             const parentId = parent === null ? undefined : ids.get(parent)
             if (
                 parent === null ||
@@ -146,22 +171,27 @@ export class MutationWriter {
             ) {
                 continue
             }
-            // One run covers the neighbouring pending siblings too. It goes before the next sibling the
-            // replay already has: one written earlier, or one from this batch.
-            let first = top
-            for (let sibling = first.previousSibling; sibling !== null && pending(sibling);) {
-                first = sibling
-                sibling = sibling.previousSibling
-            }
             run.length = 0
-            let anchor: Node | null = first
-            for (; anchor !== null && pending(anchor); anchor = anchor.nextSibling) {
-                if (isRecordable(anchor)) {
-                    run.push(anchor)
+            let anchor: Node | null = null
+            if (isShadowRoot(top) || isDocument(top)) {
+                // A shadow root or a frame's document is a run of its own.
+                run.push(top)
+            } else {
+                // One run covers the neighbouring pending siblings too. It goes before the next sibling the
+                // replay already has: one written earlier, or one from this batch.
+                let first = top
+                for (let sibling = first.previousSibling; sibling !== null && pending(sibling);) {
+                    first = sibling
+                    sibling = sibling.previousSibling
                 }
-            }
-            while (anchor !== null && (pending(anchor) || !ids.has(anchor))) {
-                anchor = anchor.nextSibling
+                for (anchor = first; anchor !== null && pending(anchor); anchor = anchor.nextSibling) {
+                    if (isRecordable(anchor)) {
+                        run.push(anchor)
+                    }
+                }
+                while (anchor !== null && (pending(anchor) || !ids.has(anchor))) {
+                    anchor = anchor.nextSibling
+                }
             }
             if (run.length === 0) {
                 continue
@@ -170,7 +200,9 @@ export class MutationWriter {
             writer.bytes.varuint(parentId)
             writer.bytes.varuint(anchor === null ? 0 : (ids.get(anchor) ?? 0))
             writer.bytes.varuint(run.length)
-            const mask = isElement(parent) ? privacy.textMaskIn(parent) : TextMask.None
+            const mask = privacy.textMaskIn(parent)
+            // A document a frame loaded may be scrolled already, unlike nodes a page inserts.
+            tree.readScroll = isDocument(top)
             for (const item of run) {
                 tree.begin(item, HTML_NAMESPACE, mask)
                 tree.run()
@@ -181,7 +213,7 @@ export class MutationWriter {
         let attributeCount = 0
         for (const [element, names] of buffer.attributes) {
             const id = ids.get(element)
-            if (id === undefined || id >= batchStart || !element.isConnected || privacy.blocks(element)) {
+            if (id === undefined || id >= batchStart || !scope.contains(element) || privacy.blocks(element)) {
                 continue
             }
             const masksValue = isInput(element) && privacy.masksValue(element)
@@ -208,13 +240,15 @@ export class MutationWriter {
         let textCount = 0
         for (const node of buffer.texts) {
             const id = ids.get(node)
-            if (id === undefined || id >= batchStart || !node.isConnected) {
+            if (id === undefined || id >= batchStart || !scope.contains(node)) {
                 continue
             }
             if (isText(node) || isComment(node)) {
-                const parent = node.parentElement
-                const mask = parent === null ? TextMask.None : privacy.textMaskIn(parent)
-                writer.textChange(id, applyTextMask(mask, node.data))
+                const parent = node.parentNode
+                writer.textChange(
+                    id,
+                    parent === null ? node.data : applyTextMask(privacy.textMaskIn(parent), node.data)
+                )
                 textCount++
             }
         }

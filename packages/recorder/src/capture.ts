@@ -9,8 +9,11 @@ import {
 } from '@timecat-js/protocol'
 import type { EventSink } from './batch.ts'
 import {
+    containerOf,
     HTML_NAMESPACE,
+    isDocument,
     isForm,
+    isFrame,
     isInput,
     isNode,
     isOptGroup,
@@ -20,13 +23,15 @@ import {
     isTextArea
 } from './dom.ts'
 import { NodeIds } from './ids.ts'
-import { hookFormSetters, InputRecorder } from './inputs.ts'
+import { InputRecorder } from './inputs.ts'
 import { MutationBuffer, MutationWriter } from './mutations.ts'
 import { MAX_MOVES_SPAN, PointerRecorder, pointerTypeOf } from './pointer.ts'
 import { Privacy, TextMask } from './privacy.ts'
 import type { PrivacyOptions } from './privacy.ts'
+import { RealmHooker } from './realm.ts'
 import { ScrollRecorder } from './scroll.ts'
 import { TreeWriter } from './tree.ts'
+import type { InnerRoot, Scope } from './tree.ts'
 
 export interface CaptureOptions extends PrivacyOptions {
     window: Window
@@ -46,7 +51,10 @@ export interface CaptureOptions extends PrivacyOptions {
     onError: (error: unknown) => void
 }
 
-const WINDOW_EVENTS = [
+const OBSERVE: MutationObserverInit = { childList: true, subtree: true, attributes: true, characterData: true }
+
+/** Events of the frames' windows. */
+const FRAME_EVENTS = [
     'input',
     'change',
     'reset',
@@ -55,12 +63,21 @@ const WINDOW_EVENTS = [
     'pointerup',
     'pointercancel',
     'scroll',
-    'resize',
     'popstate',
     'hashchange',
-    'pagehide',
-    'visibilitychange'
+    'DOMContentLoaded'
 ]
+
+/** Events of the page's window, whose size and visibility frames share. */
+const WINDOW_EVENTS = [...FRAME_EVENTS, 'resize', 'pagehide', 'visibilitychange']
+
+/**
+ * Events in a shadow tree that its window does not see: they do not leave the tree, or are seen there with the
+ * host as their target, as `input` is.
+ */
+const SHADOW_EVENTS = ['input', 'change', 'reset', 'scroll']
+
+const ORIGIN = [0, 0] as const
 
 /** Initial capacity of the snapshot buffer, which every time slice reuses. */
 const SNAPSHOT_BUFFER = 64 * 1024
@@ -70,8 +87,11 @@ const SNAPSHOT_BUFFER = 64 * 1024
  * task or the animation frame that changed it ends. The mutation observer is attached before the snapshot, which
  * uses the records as its guard (see `SnapshotGuard`); the changes the snapshot misses follow it as a Mutations
  * event of the same time.
+ *
+ * The capture covers shadow trees and the documents of same-origin frames as part of the document (it is the
+ * `Scope` of the writers): each is observed and listened to from the time it is written.
  */
-export class Capture implements EventListenerObject {
+export class Capture implements EventListenerObject, Scope {
     readonly #options: CaptureOptions
     readonly #window: Window
     readonly #document: Document
@@ -85,13 +105,29 @@ export class Capture implements EventListenerObject {
     readonly #scroll: ScrollRecorder
     readonly #observer: MutationObserver
     readonly #listeners = new AbortController()
-    #unhook: () => void = noop
+    readonly #listenerOptions: AddEventListenerOptions = {
+        capture: true,
+        passive: true,
+        signal: this.#listeners.signal
+    }
+    #realms: RealmHooker | undefined
+    /** Documents and shadow roots that are observed and listened to. */
+    readonly #watched = new WeakSet<Node>()
+    /** Closed shadow roots attached while recording, by host; open ones are found through their host. */
+    readonly #closedRoots = new WeakMap<Element, ShadowRoot>()
+    /** Frames written, with the document written as their content, or null for none. */
+    readonly #frames = new Map<HTMLIFrameElement | HTMLFrameElement, Document | null>()
+    /** URL last recorded of each document. */
+    readonly #urls = new Map<Document, string>()
+    /** The mode each document was written in, which `document.open()` sets anew. */
+    readonly #modes = new WeakMap<Document, string>()
+    /** Where the viewports of frames' documents are in the page's viewport, until the layout may change. */
+    readonly #offsets = new Map<Document, readonly [x: number, y: number] | null>()
     /** Flushes wait while the snapshot runs: the ids they would refer to are still being assigned. */
     #snapshotting = true
     #stopped = false
     #cancelFlush: (() => void) | undefined
     #movesTimer: number | undefined
-    #url = ''
     #viewportChanged = true
     #width = -1
     #height = -1
@@ -103,10 +139,10 @@ export class Capture implements EventListenerObject {
         this.#document = options.window.document
         this.#sink = options.sink
         this.#privacy = new Privacy(options, this.#document)
-        this.#mutations = new MutationWriter(this.#ids, this.#privacy)
-        this.#inputs = new InputRecorder(this.#ids, this.#privacy)
+        this.#mutations = new MutationWriter(this.#ids, this.#privacy, this)
+        this.#inputs = new InputRecorder(this.#ids, this.#privacy, this)
         this.#pointer = new PointerRecorder(options.sink)
-        this.#scroll = new ScrollRecorder(this.#ids, options.window)
+        this.#scroll = new ScrollRecorder(this.#ids, this)
         this.#observer = new MutationObserver(records => {
             this.#buffer.push(records)
             this.#requestFlush()
@@ -118,26 +154,62 @@ export class Capture implements EventListenerObject {
      * is written. If the snapshot fails, the error is reported and capturing stops.
      */
     start(): Promise<void> {
-        const window = this.#window
-        this.#observer.observe(this.#document, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            characterData: true
-        })
-        const options: AddEventListenerOptions = { capture: true, passive: true, signal: this.#listeners.signal }
-        for (const type of WINDOW_EVENTS) {
-            window.addEventListener(type, this, options)
-        }
-        // Same-document navigations by the History API fire no window event; the Navigation API reports them.
-        if ('navigation' in window) {
-            window.navigation.addEventListener('currententrychange', this, options)
-        }
-        this.#unhook = hookFormSetters(this.#document, this.#onFormSet)
+        this.#realms = new RealmHooker({ formSet: this.#onFormSet, shadowAttached: this.#onShadowAttached })
+        this.enter(this.#document)
         return this.#snapshot().catch((error: unknown) => {
             this.#options.onError(error)
             this.stop()
         })
+    }
+
+    shadowRoot(host: Element): ShadowRoot | null {
+        return host.shadowRoot ?? this.#closedRoots.get(host) ?? null
+    }
+
+    frameDocument(frame: HTMLIFrameElement | HTMLFrameElement): Document | null {
+        if (!this.#frames.has(frame)) {
+            // A frame loads its documents after it is inserted; each load may bring a new one.
+            frame.addEventListener('load', this, this.#listenerOptions)
+        }
+        const document = frame.contentDocument
+        this.#frames.set(frame, document)
+        return document
+    }
+
+    enter(root: InnerRoot): void {
+        if (isDocument(root)) {
+            this.#urls.set(root, root.URL)
+            this.#modes.set(root, root.compatMode)
+            // A document can be scrolled by the time it is written.
+            this.#scroll.mark(root)
+        }
+        if (this.#watched.has(root)) {
+            return
+        }
+        this.#watched.add(root)
+        this.#observer.observe(root, OBSERVE)
+        if (isDocument(root)) {
+            this.#listenToWindow(root)
+        } else {
+            this.#listen(root, SHADOW_EVENTS)
+        }
+    }
+
+    contains(node: Node): boolean {
+        if (!node.isConnected) {
+            return false
+        }
+        const document = isDocument(node) ? node : node.ownerDocument
+        if (document === this.#document) {
+            return true
+        }
+        // A frame's document is part of the page while the frame shows it, and the frame is part of the page.
+        const frame = document?.defaultView?.frameElement ?? null
+        return frame !== null && isFrame(frame) && frame.contentDocument === document && this.contains(frame)
+    }
+
+    parent(node: Node): Node | null {
+        return node.parentNode ?? containerOf(node, this.#document)
     }
 
     /** Writes what changed since the last flush. `force` also writes the pointer moves collected so far. */
@@ -159,10 +231,13 @@ export class Capture implements EventListenerObject {
         this.#stopped = true
         this.#observer.disconnect()
         this.#listeners.abort()
-        this.#unhook()
+        this.#realms?.unhook()
         this.#cancelFlush?.()
         this.#cancelFlush = undefined
         clearTimeout(this.#movesTimer)
+        this.#frames.clear()
+        this.#urls.clear()
+        this.#offsets.clear()
     }
 
     handleEvent(event: Event): void {
@@ -170,17 +245,12 @@ export class Capture implements EventListenerObject {
             return
         }
         const target = event.target
-        // popstate, hashchange and currententrychange only request a flush, which compares the URL.
+        // popstate, hashchange and currententrychange only request a flush, which compares the URLs; load, of a
+        // frame, does too, which looks for new documents.
         switch (event.type) {
             case 'pointermove':
                 if (isPointerEvent(event) && event.isPrimary) {
-                    this.#pointer.move(
-                        this.#options.now(),
-                        pointerTypeOf(event),
-                        Math.round(event.clientX),
-                        Math.round(event.clientY)
-                    )
-                    this.#awaitMoves()
+                    this.#pointerMove(event)
                 }
                 // Moves need no flush until they span long enough to be written: a timer covers them, so a moving
                 // pointer costs no task per move.
@@ -189,15 +259,7 @@ export class Capture implements EventListenerObject {
             case 'pointerup':
             case 'pointercancel':
                 if (isPointerEvent(event) && event.isPrimary) {
-                    this.#pointer.button(
-                        this.#options.now(),
-                        event.type === 'pointerdown' ? PointerAction.Down : PointerAction.Up,
-                        pointerTypeOf(event),
-                        Math.min(Math.max(event.button, 0), 255),
-                        Math.round(event.clientX),
-                        Math.round(event.clientY),
-                        isNode(target) ? (this.#ids.get(target) ?? 0) : 0
-                    )
+                    this.#pointerButton(event)
                 }
                 break
             case 'input':
@@ -214,12 +276,20 @@ export class Capture implements EventListenerObject {
                 }
                 break
             case 'scroll':
+                // Frames may have moved in the viewport.
+                this.#offsets.clear()
                 if (isNode(target)) {
                     this.#scroll.mark(target)
                 }
                 break
             case 'resize':
+                this.#offsets.clear()
                 this.#viewportChanged = true
+                break
+            case 'DOMContentLoaded':
+                if (isNode(target) && isDocument(target)) {
+                    this.#findDeclarativeRoots(target)
+                }
                 break
             case 'pagehide':
                 this.#hide()
@@ -233,12 +303,42 @@ export class Capture implements EventListenerObject {
         this.#requestFlush()
     }
 
+    #pointerMove(event: PointerEvent): void {
+        const offset = this.#offsetOf(event.target)
+        if (offset !== null) {
+            this.#pointer.move(
+                this.#options.now(),
+                pointerTypeOf(event),
+                Math.round(event.clientX + offset[0]),
+                Math.round(event.clientY + offset[1])
+            )
+            this.#awaitMoves()
+        }
+    }
+
+    #pointerButton(event: PointerEvent): void {
+        const offset = this.#offsetOf(event.target)
+        if (offset === null) {
+            return
+        }
+        // The target in a shadow tree, where the window sees the host.
+        const target = event.composedPath()[0] ?? event.target
+        this.#pointer.button(
+            this.#options.now(),
+            event.type === 'pointerdown' ? PointerAction.Down : PointerAction.Up,
+            pointerTypeOf(event),
+            Math.min(Math.max(event.button, 0), 255),
+            Math.round(event.clientX + offset[0]),
+            Math.round(event.clientY + offset[1]),
+            isNode(target) ? (this.#ids.get(target) ?? 0) : 0
+        )
+    }
+
     async #snapshot(): Promise<void> {
         const document = this.#document
         const { sink, sliceMs, checkEvery } = this.#options
         const writer = new EventWriter(new ByteWriter(SNAPSHOT_BUFFER))
-        const tree = new TreeWriter(writer, this.#ids, this.#privacy, this.#buffer, true)
-        this.#url = document.URL
+        const tree = new TreeWriter(writer, this.#ids, this.#privacy, this, this.#buffer, true)
         writer.snapshotHeader()
         tree.begin(document, HTML_NAMESPACE, TextMask.None)
         let deadline = performance.now() + sliceMs
@@ -258,7 +358,6 @@ export class Capture implements EventListenerObject {
         const time = this.#options.now()
         sink.event(Track.Dom, EventType.Snapshot, time, writer.take())
         this.#inputs.added(tree.controls)
-        this.#scroll.mark(document)
         for (const element of tree.scrolled) {
             this.#scroll.mark(element)
         }
@@ -271,14 +370,24 @@ export class Capture implements EventListenerObject {
         try {
             const buffer = this.#buffer
             buffer.push(this.#observer.takeRecords())
+            for (const parent of buffer.parents) {
+                if (isDocument(parent)) {
+                    this.#documentChanged(parent, buffer)
+                }
+            }
+            this.#checkFrames(buffer)
             if (!buffer.isEmpty) {
                 try {
                     this.#markControls(buffer)
-                    const body = this.#mutations.write(buffer)
+                    const mutations = this.#mutations
+                    const body = mutations.write(buffer)
                     if (body !== undefined) {
                         sink.event(Track.Dom, EventType.Mutations, time, body)
                     }
-                    this.#inputs.added(this.#mutations.controls)
+                    this.#inputs.added(mutations.controls)
+                    for (const element of mutations.scrolled) {
+                        this.#scroll.mark(element)
+                    }
                 } finally {
                     buffer.clear()
                 }
@@ -293,18 +402,144 @@ export class Capture implements EventListenerObject {
                 sink.event(Track.Scroll, EventType.Scroll, time, scroll)
             }
             this.#writeViewport(time)
-            const document = this.#document
-            const url = document.URL
-            const id = this.#ids.get(document)
-            if (url !== this.#url && id !== undefined) {
-                this.#url = url
-                sink.event(Track.Navigation, EventType.Navigation, time, encodeNavigation({ id, url }))
-            }
+            this.#writeNavigations(time)
             sink.commit()
         } catch (error) {
             this.#options.onError(error)
         }
+        // Changes may have moved frames in the viewport.
+        this.#offsets.clear()
         this.#awaitMoves()
+    }
+
+    /**
+     * Follows a document whose children changed, as they do when `document.open()` starts it anew. That removes
+     * every listener of its window, and sets the document's mode anew, which the doctype written next may change
+     * again: a frame's document in another mode than recorded is written anew. The page's own mode stays as the
+     * snapshot found it.
+     */
+    #documentChanged(document: Document, buffer: MutationBuffer): void {
+        this.#listenToWindow(document)
+        if (
+            document !== this.#document &&
+            document.compatMode !== this.#modes.get(document) &&
+            this.contains(document)
+        ) {
+            // Removing it from the replay writes it again, with all it holds.
+            buffer.removed.add(document)
+        }
+    }
+
+    /**
+     * Notes frames that show another document than the one recorded: the replay gets the new one, or loses the
+     * old one when the new one cannot be read, as a cross-origin one cannot.
+     */
+    #checkFrames(buffer: MutationBuffer): void {
+        for (const [frame, recorded] of this.#frames) {
+            if (!this.contains(frame)) {
+                // The frame's removal reaches the replay as a mutation; inserted again, it is written anew.
+                this.#frames.delete(frame)
+                continue
+            }
+            const current = frame.contentDocument
+            if (current !== recorded) {
+                this.#frames.set(frame, current)
+                if (current !== null) {
+                    buffer.added.add(current)
+                } else if (recorded !== null) {
+                    buffer.removed.add(recorded)
+                }
+            }
+        }
+    }
+
+    /** Writes the same-document navigations of the page and its frames. */
+    #writeNavigations(time: number): void {
+        for (const [document, url] of this.#urls) {
+            if (!this.contains(document)) {
+                this.#urls.delete(document)
+                continue
+            }
+            const current = document.URL
+            const id = this.#ids.get(document)
+            if (current !== url && id !== undefined) {
+                this.#urls.set(document, current)
+                this.#sink.event(Track.Navigation, EventType.Navigation, time, encodeNavigation({ id, url: current }))
+            }
+        }
+    }
+
+    /**
+     * Where the viewport of the document of an event's target is in the page's viewport: frames' viewports are
+     * offset by their place. Null when the target is in no document the recording covers.
+     */
+    #offsetOf(target: EventTarget | null): readonly [x: number, y: number] | null {
+        const document = isNode(target) ? (isDocument(target) ? target : target.ownerDocument) : null
+        return document === null || document === this.#document ? ORIGIN : this.#frameOffset(document)
+    }
+
+    #frameOffset(document: Document): readonly [x: number, y: number] | null {
+        let offset = this.#offsets.get(document)
+        if (offset !== undefined) {
+            return offset
+        }
+        offset = null
+        const frame = document.defaultView?.frameElement ?? null
+        if (frame !== null && isFrame(frame) && frame.contentDocument === document) {
+            const outer = frame.ownerDocument
+            const base = outer === this.#document ? ORIGIN : this.#frameOffset(outer)
+            const view = outer.defaultView
+            if (base !== null && view !== null) {
+                // The viewport is the frame's content box.
+                const box = frame.getBoundingClientRect()
+                const style = view.getComputedStyle(frame)
+                offset = [
+                    base[0] + box.left + frame.clientLeft + Number.parseFloat(style.paddingLeft),
+                    base[1] + box.top + frame.clientTop + Number.parseFloat(style.paddingTop)
+                ]
+            }
+        }
+        this.#offsets.set(document, offset)
+        return offset
+    }
+
+    /**
+     * Finds shadow roots that the parser attached to hosts already written: declarative ones, which no record
+     * or hook reports. Only a parser attaches roots this way, so one look once it is done covers them. Closed
+     * ones cannot be found.
+     */
+    #findDeclarativeRoots(root: Document | ShadowRoot): void {
+        const ids = this.#ids
+        for (const element of root.querySelectorAll('*')) {
+            const shadow = element.shadowRoot
+            if (shadow !== null && ids.has(element)) {
+                if (ids.has(shadow)) {
+                    this.#findDeclarativeRoots(shadow)
+                } else {
+                    this.#buffer.added.add(shadow)
+                }
+            }
+        }
+    }
+
+    /** Listens to the window of `document`, and hooks its realm. Adding a listener again adds nothing. */
+    #listenToWindow(document: Document): void {
+        const view = document.defaultView
+        if (view === null) {
+            return
+        }
+        this.#listen(view, view === this.#window ? WINDOW_EVENTS : FRAME_EVENTS)
+        // Same-document navigations by the History API fire no window event; the Navigation API reports them.
+        if ('navigation' in view) {
+            this.#listen(view.navigation, ['currententrychange'])
+        }
+        this.#realms?.hook(view)
+    }
+
+    #listen(target: EventTarget, types: readonly string[]): void {
+        for (const type of types) {
+            target.addEventListener(type, this, this.#listenerOptions)
+        }
     }
 
     /** Moves are written once they span long enough, which a flush then has to notice. */
@@ -382,10 +617,25 @@ export class Capture implements EventListenerObject {
         this.#requestFlush()
     }
 
+    // The hooks serve every document of their realm, recorded or not.
+
     readonly #onFormSet = (node: Node): void => {
-        // The hooked setters serve every document of their realm.
-        if (!this.#stopped && node.ownerDocument === this.#document) {
+        if (!this.#stopped && this.contains(node)) {
             this.#inputs.mark(node)
+            this.#requestFlush()
+        }
+    }
+
+    readonly #onShadowAttached = (host: Element, root: ShadowRoot): void => {
+        if (this.#stopped) {
+            return
+        }
+        if (root.mode === 'closed') {
+            // The host may be inserted later, and only this hook sees the root.
+            this.#closedRoots.set(host, root)
+        }
+        if (this.contains(host)) {
+            this.#buffer.added.add(root)
             this.#requestFlush()
         }
     }
@@ -427,5 +677,3 @@ function nextTask(run: () => void): void {
     port1.start()
     port2.postMessage(null)
 }
-
-function noop(): void {}

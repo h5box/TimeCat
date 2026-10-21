@@ -1,10 +1,11 @@
 import { encodeInput, InputKind } from '@timecat-js/protocol'
 import type { InputChange } from '@timecat-js/protocol'
-import { isCheckable, isFormControl, isInput, isOptGroup, isOption, isSelect } from './dom.ts'
+import { isCheckable, isDocument, isFormControl, isInput, isOptGroup, isOption, isSelect, isShadowRoot } from './dom.ts'
 import type { FormControl } from './dom.ts'
 import type { NodeIds } from './ids.ts'
 import { maskValue } from './privacy.ts'
 import type { Privacy } from './privacy.ts'
+import type { Scope } from './tree.ts'
 
 /**
  * Records the state of form controls: values, checked state and selected options. Controls are marked when
@@ -13,13 +14,15 @@ import type { Privacy } from './privacy.ts'
 export class InputRecorder {
     readonly #ids: NodeIds
     readonly #privacy: Privacy
+    readonly #scope: Scope
     readonly #marked = new Set<FormControl>()
     /** Last recorded value or selection per control, to leave out writes that change nothing. */
     readonly #last = new WeakMap<FormControl, string>()
 
-    constructor(ids: NodeIds, privacy: Privacy) {
+    constructor(ids: NodeIds, privacy: Privacy, scope: Scope) {
         this.#ids = ids
         this.#privacy = privacy
+        this.#scope = scope
     }
 
     /**
@@ -78,7 +81,7 @@ export class InputRecorder {
     #change(control: FormControl): InputChange | undefined {
         const id = this.#ids.get(control)
         const privacy = this.#privacy
-        if (id === undefined || !control.isConnected || privacy.ignores(control) || privacy.blocks(control)) {
+        if (id === undefined || !this.#scope.contains(control) || privacy.ignores(control) || privacy.blocks(control)) {
             return undefined
         }
         if (isCheckable(control)) {
@@ -104,15 +107,30 @@ export class InputRecorder {
         return this.#changed(control, value) ? { kind: InputKind.Value, id, value } : undefined
     }
 
-    /** Inserting a checked radio button unchecks the others of its group, which fires no event. */
+    /**
+     * Inserting a checked radio button unchecks the others of its group, which fires no event. A group is made of
+     * the radio buttons of one tree: a document or a shadow tree.
+     */
     #markGroup(radio: HTMLInputElement): void {
         const name = radio.name
         if (name === '') {
             return
         }
         const form = radio.form
-        for (const element of radio.ownerDocument.getElementsByName(name)) {
-            if (element !== radio && isInput(element) && element.type === 'radio' && element.form === form) {
+        const root = radio.getRootNode()
+        const candidates: Iterable<Element> = isDocument(root)
+            ? root.getElementsByName(name)
+            : isShadowRoot(root)
+              ? root.querySelectorAll('input')
+              : []
+        for (const element of candidates) {
+            if (
+                element !== radio &&
+                isInput(element) &&
+                element.type === 'radio' &&
+                element.name === name &&
+                element.form === form
+            ) {
                 this.#marked.add(element)
             }
         }
@@ -146,59 +164,3 @@ function differsFromMarkup(control: FormControl): boolean {
     }
     return control.value !== control.defaultValue
 }
-
-/** Setters that change form state without an input event. */
-const SETTERS: [tag: string, properties: string[]][] = [
-    ['input', ['value', 'checked']],
-    ['textarea', ['value']],
-    ['select', ['value', 'selectedIndex']],
-    ['option', ['selected']]
-]
-
-/**
- * Wraps the setters that change form state, so script changes are seen too. Hooks the prototypes of the realm
- * `document` belongs to, and of the realm this code runs in when that is another one: Chromium gives a node the
- * wrapper of the realm that first reaches it, which for nodes added later is the realm of the mutation
- * observer. Returns a function that removes the hooks.
- */
-export function hookFormSetters(document: Document, onSet: (node: Node) => void): () => void {
-    const removers: (() => void)[] = []
-    const prototypes = new Set<object>()
-    for (const [tag, properties] of SETTERS) {
-        for (const owner of [document, globalThis.document]) {
-            const prototype: object = Object.getPrototypeOf(owner.createElement(tag))
-            if (prototypes.has(prototype)) {
-                continue
-            }
-            prototypes.add(prototype)
-            for (const property of properties) {
-                removers.push(hookSetter(prototype, property, onSet))
-            }
-        }
-    }
-    return () => {
-        for (const remove of removers) {
-            remove()
-        }
-    }
-}
-
-function hookSetter(prototype: object, property: string, onSet: (node: Node) => void): () => void {
-    const original = Object.getOwnPropertyDescriptor(prototype, property)
-    if (original?.set === undefined || original.configurable !== true) {
-        return noop
-    }
-    const set = function (this: Node, value: unknown): void {
-        original.set!.call(this, value)
-        onSet(this)
-    }
-    Object.defineProperty(prototype, property, { ...original, set })
-    return () => {
-        // Someone may have wrapped the setter again since; removing ours would remove theirs too.
-        if (Object.getOwnPropertyDescriptor(prototype, property)?.set === set) {
-            Object.defineProperty(prototype, property, original)
-        }
-    }
-}
-
-function noop(): void {}

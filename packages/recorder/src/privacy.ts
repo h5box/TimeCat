@@ -1,4 +1,4 @@
-import { isInput, isStyle, isTextArea } from './dom.ts'
+import { containerOf, isElement, isInput, isStyle, isTextArea } from './dom.ts'
 import type { FormControl } from './dom.ts'
 
 export interface PrivacyOptions {
@@ -46,14 +46,23 @@ export function applyTextMask(mask: TextMask, text: string): string {
     return mask === TextMask.None ? text : mask === TextMask.Text ? maskText(text) : maskValue(text)
 }
 
+/**
+ * Applies the privacy options. Selectors that apply to a region, `maskText` and `ignore`, cover what is shown
+ * inside it too: shadow trees of hosts in the region, and documents of frames in it.
+ */
 export class Privacy {
+    readonly #document: Document
     readonly #maskText: string | undefined
     readonly #block: string | undefined
     readonly #ignore: string | undefined
     readonly #unmaskInputs: string | undefined
 
-    /** Throws a `SyntaxError` for an invalid selector, so mistakes surface when recording starts. */
+    /**
+     * `document` is the recorded document. Throws a `SyntaxError` for an invalid selector, so mistakes surface
+     * when recording starts.
+     */
     constructor(options: PrivacyOptions, document: Document) {
+        this.#document = document
         const probe = document.createElement('div')
         const check = (selector: string | undefined): string | undefined => {
             if (selector !== undefined) {
@@ -81,15 +90,26 @@ export class Privacy {
             : TextMask.None
     }
 
-    /** Mask of the text directly inside `parent`, worked out from its ancestors. */
-    textMaskIn(parent: Element): TextMask {
-        if (isStyle(parent)) {
-            return TextMask.None
+    /**
+     * Mask of the text directly inside `parent`, worked out from its ancestors. The parent can also be a shadow
+     * root or a document, whose text the region of its host or frame covers.
+     */
+    textMaskIn(parent: Node): TextMask {
+        let element: Element | null
+        if (isElement(parent)) {
+            if (isStyle(parent)) {
+                return TextMask.None
+            }
+            if (isTextArea(parent) && this.masksValue(parent)) {
+                return TextMask.Value
+            }
+            element = parent
+        } else {
+            element = containerOf(parent, this.#document)
         }
-        if (isTextArea(parent) && this.masksValue(parent)) {
-            return TextMask.Value
-        }
-        return this.#maskText !== undefined && parent.closest(this.#maskText) !== null ? TextMask.Text : TextMask.None
+        return element !== null && this.#maskText !== undefined && this.#inRegion(element, this.#maskText)
+            ? TextMask.Text
+            : TextMask.None
     }
 
     blocks(element: Element): boolean {
@@ -97,7 +117,7 @@ export class Privacy {
     }
 
     ignores(element: Element): boolean {
-        return this.#ignore !== undefined && element.closest(this.#ignore) !== null
+        return this.#ignore !== undefined && this.#inRegion(element, this.#ignore)
     }
 
     /** Whether the value of `control` is recorded masked. For `<select>`, masked means not recorded at all. */
@@ -112,5 +132,19 @@ export class Privacy {
             }
         }
         return this.#unmaskInputs === undefined || !control.matches(this.#unmaskInputs)
+    }
+
+    /** Whether `element` or an ancestor matches `selector`, looking out of shadow trees and frames. */
+    #inRegion(element: Element, selector: string): boolean {
+        for (
+            let inner: Element | null = element;
+            inner !== null;
+            inner = containerOf(inner.getRootNode(), this.#document)
+        ) {
+            if (inner.closest(selector) !== null) {
+                return true
+            }
+        }
+        return false
     }
 }

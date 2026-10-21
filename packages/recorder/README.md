@@ -1,8 +1,9 @@
 # @timecat-js/recorder
 
 The TimeCat session recorder: it records what happens in a page (DOM changes, form input, pointer, scrolling, the
-viewport and same-document navigation) as a TCR recording, which `@timecat-js/player-core` replays. The main thread
-only reads the page and encodes what changed; compression and storage run in a worker.
+viewport and same-document navigation), its shadow trees and same-origin frames included, as a TCR recording, which
+`@timecat-js/player-core` replays. The main thread only reads the page and encodes what changed; compression and
+storage run in a worker.
 
 > Pre-release. The API and the recording format may change without notice until 1.0.
 
@@ -57,6 +58,10 @@ before anything is encoded, so what is masked never reaches the worker, storage 
 checkboxes and radio buttons, and which of them are checked, are recorded as they are. A `<select>` with a masked
 value records no selection. Text in `<style>` elements is never masked, since that would break the CSS.
 
+The regions `maskText` and `ignore` select take in the shadow trees and frames inside them. Selectors match within
+each tree, as CSS does: `.private p` does not reach a paragraph in a shadow tree below `.private`, but `.private`
+covers it.
+
 ## How it works
 
 **Snapshot.** Recording starts with a snapshot of the document, taken in slices of 8 ms with the page's own work in
@@ -69,8 +74,15 @@ of their own once the task that changed them ends, or once the frame renders whe
 them, so every frame's changes are written. They are coalesced: however often a node, an attribute or a text changed
 in between, what is written is where it ended up, once, and a node added and removed again in between is left out.
 Script changes to form controls, which fire no event, are caught by wrapping the `value`, `checked`, `selectedIndex`
-and `selected` setters. Pointer moves are batched into columns and written once a batch spans a second, by a timer:
-a moving pointer costs no task per move.
+and `selected` setters, in the page's realm and in each of its frames'. Pointer moves are batched into columns and
+written once a batch spans a second, by a timer: a moving pointer costs no task per move.
+
+**Shadow trees and frames.** Shadow roots and the documents of same-origin frames are written with their hosts and
+frames, and observed from then on. Shadow roots that script attaches are caught by wrapping `attachShadow`, which is
+also the only way to reach closed ones; declarative shadow roots that the parser attaches to hosts already written
+are looked for once a document is parsed. Frames are checked for a new document whenever changes are written and
+when they load; a document the recorder cannot read, as a cross-origin one, leaves the frame empty. Pointer
+positions in frames are converted to the page's viewport.
 
 **Encoding.** Events are encoded into the binary TCR format as they are written, with ids implied by the order of
 nodes and strings shared through tables, and handed to the worker in batches, without a copy. The worker groups
@@ -88,7 +100,12 @@ Chrome and Edge 111, Firefox 115, Safari 16.4 and later.
 
 ## Limitations
 
-- Frames and shadow roots inside the page are not recorded yet, nor canvas, video and audio content (M2).
+- Cross-origin frames are recorded empty, and canvas, video and audio content is not recorded.
+- Closed shadow roots attached before recording started, and closed declarative shadow roots, are not recorded:
+  nothing outside them can reach them.
+- Pointer positions in frames ignore CSS transforms of the frames.
+- `document.open()` on the page itself keeps the page's mode (quirks or standards) as the snapshot found it; frames
+  are written anew in their new mode.
 - Style sheet changes made through the CSSOM (`insertRule`, constructed style sheets) are not recorded; changes to
   `<style>` and `<link>` elements are.
 - Hover and focus states, text selection and the top layer (open dialogs and popovers) are not recorded.

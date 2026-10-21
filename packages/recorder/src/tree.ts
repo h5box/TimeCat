@@ -6,7 +6,9 @@ import {
     isDocument,
     isElement,
     isFormControl,
+    isFrame,
     isInput,
+    isShadowRoot,
     isText,
     recordsChildren
 } from './dom.ts'
@@ -14,6 +16,26 @@ import type { FormControl } from './dom.ts'
 import type { NodeIds } from './ids.ts'
 import { applyTextMask, BLOCKED_ATTRIBUTE, maskValue, TextMask } from './privacy.ts'
 import type { Privacy } from './privacy.ts'
+
+/** A shadow root, or the document a frame shows. */
+export type InnerRoot = ShadowRoot | Document
+
+/**
+ * What the recording covers besides the tree of the recorded document: shadow trees, the documents of
+ * same-origin frames, and theirs in turn.
+ */
+export interface Scope {
+    /** The shadow root of `host`, or null. Closed ones too, when they were attached while recording. */
+    shadowRoot(host: Element): ShadowRoot | null
+    /** The document `frame` shows, or null when it shows none the recording can read. */
+    frameDocument(frame: HTMLIFrameElement | HTMLFrameElement): Document | null
+    /** Called once `root` is written, so its changes are recorded from then on. */
+    enter(root: InnerRoot): void
+    /** Whether `node` is part of the page: in its tree, in a shadow tree of it, or in the document of a frame. */
+    contains(node: Node): boolean
+    /** The parent of `node`, or for a shadow root its host, for a frame's document the frame. */
+    parent(node: Node): Node | null
+}
 
 /**
  * Lets a snapshot keep its place while the page changes between time slices. Fed by the mutation observer,
@@ -46,27 +68,41 @@ interface Frame {
  *
  * With a guard (snapshots), the writer only visits nodes that were in place when recording started and have not
  * moved since: inserted and moved nodes are skipped, because the mutations that follow the snapshot add them.
- * Changes inside already written parts reach the recording the same way, as those mutations.
+ * Changes inside already written parts reach the recording the same way, as those mutations. Shadow trees and
+ * frame documents are observed from the time they are written, so for them, "since" starts there.
  */
 export class TreeWriter {
     /** Form controls written, whose current state the input track adds. The caller empties it. */
     readonly controls: FormControl[] = []
-    /** Elements written with a scroll offset, when reading them was requested. */
+    /** Elements written with a scroll offset, when reading them was requested. The caller empties it. */
     readonly scrolled: Element[] = []
+    /**
+     * Whether to look for scrolled elements, which takes layout. Elements a page inserts are not scrolled yet,
+     * unlike those of a snapshot, or of a document that loaded into a frame.
+     */
+    readScroll: boolean
 
     readonly #writer: EventWriter
     readonly #ids: NodeIds
     readonly #privacy: Privacy
+    readonly #scope: Scope
     readonly #guard: SnapshotGuard | undefined
-    readonly #readScroll: boolean
     readonly #frames: Frame[] = []
 
-    constructor(writer: EventWriter, ids: NodeIds, privacy: Privacy, guard?: SnapshotGuard, readScroll = false) {
+    constructor(
+        writer: EventWriter,
+        ids: NodeIds,
+        privacy: Privacy,
+        scope: Scope,
+        guard?: SnapshotGuard,
+        readScroll = false
+    ) {
         this.#writer = writer
         this.#ids = ids
         this.#privacy = privacy
+        this.#scope = scope
         this.#guard = guard
-        this.#readScroll = readScroll
+        this.readScroll = readScroll
     }
 
     /**
@@ -148,17 +184,35 @@ export class TreeWriter {
         } else if (isDoctype(node)) {
             this.#ids.assign(node)
             writer.doctype(node.name, node.publicId, node.systemId)
-        } else if (isDocument(node)) {
-            this.#ids.assign(node)
-            const first = node.firstChild
-            writer.document(node.URL, node.compatMode === 'BackCompat', first !== null)
-            if (first !== null) {
-                this.#push(node, first, HTML_NAMESPACE, TextMask.None)
-            }
+        } else if (isDocument(node) || isShadowRoot(node)) {
+            this.#inner(node, mask)
         } else {
             return false
         }
         return true
+    }
+
+    /** Writes a shadow root or a frame's document, whose text has the mask `mask`, and opens its children. */
+    #inner(root: InnerRoot, mask: TextMask): void {
+        this.#ids.assign(root)
+        const first = root.firstChild
+        if (isDocument(root)) {
+            this.#writer.document(root.URL, root.compatMode === 'BackCompat', first !== null)
+        } else {
+            this.#writer.shadowRoot(root.mode === 'closed', first !== null)
+        }
+        this.#scope.enter(root)
+        if (first !== null) {
+            this.#push(root, first, HTML_NAMESPACE, mask)
+        }
+    }
+
+    /** The shadow root or document shown inside `element`, if it is to be written with the element. */
+    #innerOf(element: Element): InnerRoot | null {
+        const scope = this.#scope
+        const inner = scope.shadowRoot(element) ?? (isFrame(element) ? scope.frameDocument(element) : null)
+        // A snapshot leaves roots that came after it started to the mutations that follow, as it does nodes.
+        return inner === null || this.#guard?.added.has(inner) === true ? null : inner
     }
 
     #element(element: Element, parentNamespace: string, parentMask: TextMask): void {
@@ -183,8 +237,10 @@ export class TreeWriter {
         const masksValue = control !== undefined && isInput(control) && privacy.masksValue(control)
         const attributes = element.attributes
         const count = attributes.length
-        const first = recordsChildren(element) ? element.firstChild : null
-        writer.element(tag, ownNamespace, count, first !== null)
+        const records = recordsChildren(element)
+        const first = records ? element.firstChild : null
+        const inner = records ? this.#innerOf(element) : null
+        writer.element(tag, ownNamespace, count, first !== null || inner !== null)
         for (let i = 0; i < count; i++) {
             const attribute = attributes[i]!
             const name = attribute.name
@@ -193,15 +249,20 @@ export class TreeWriter {
         if (control !== undefined) {
             this.controls.push(control)
         }
-        if (this.#readScroll && (element.scrollTop !== 0 || element.scrollLeft !== 0)) {
+        if (this.readScroll && (element.scrollTop !== 0 || element.scrollLeft !== 0)) {
             this.scrolled.push(element)
         }
-        if (first !== null) {
-            this.#push(element, first, namespace, privacy.textMaskBelow(element, parentMask))
+        if (first !== null || inner !== null) {
+            const mask = privacy.textMaskBelow(element, parentMask)
+            // The inner root comes first: its frame goes on top, and the element's own children follow it.
+            this.#push(element, first, namespace, mask)
+            if (inner !== null) {
+                this.#inner(inner, mask)
+            }
         }
     }
 
-    #push(parent: Node, first: Node, namespace: string, mask: TextMask): void {
+    #push(parent: Node, first: Node | null, namespace: string, mask: TextMask): void {
         this.#frames.push({ parent, next: first, namespace, mask, checked: this.#guard?.generation ?? 0 })
     }
 }

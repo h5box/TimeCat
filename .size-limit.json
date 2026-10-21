@@ -7,11 +7,19 @@
         "limit": "7 kB"
     },
     {
-        "name": "@timecat-js/recorder (main thread)",
+        "name": "@timecat-js/recorder (loaded with the page)",
+        "path": "packages/recorder/dist/index.js",
+        "import": "{ record }",
+        "entry": ["index"],
+        "gzip": true,
+        "limit": "15 kB"
+    },
+    {
+        "name": "@timecat-js/recorder (worker and main-thread fallback, loaded on demand, included)",
         "path": "packages/recorder/dist/index.js",
         "import": "{ record }",
         "gzip": true,
-        "limit": "15 kB"
+        "limit": "18 kB"
     },
     {
         "name": "@timecat-js/player-core (lazy chunks and worker included)",

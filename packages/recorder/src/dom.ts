@@ -9,11 +9,12 @@ const CDATA_SECTION_NODE = 4
 const COMMENT_NODE = 8
 const DOCUMENT_NODE = 9
 const DOCUMENT_TYPE_NODE = 10
+const DOCUMENT_FRAGMENT_NODE = 11
 
 export type FormControl = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement
 
-export function isNode(target: EventTarget | null): target is Node {
-    return target !== null && 'nodeType' in target
+export function isNode(value: unknown): value is Node {
+    return typeof value === 'object' && value !== null && 'nodeType' in value
 }
 
 export function isElement(node: Node): node is Element {
@@ -35,6 +36,21 @@ export function isDocument(node: Node): node is Document {
 
 export function isDoctype(node: Node): node is DocumentType {
     return node.nodeType === DOCUMENT_TYPE_NODE
+}
+
+export function isShadowRoot(node: Node): node is ShadowRoot {
+    return node.nodeType === DOCUMENT_FRAGMENT_NODE && 'host' in node
+}
+
+/**
+ * The element whose rendering `root` belongs to: the host of a shadow root, or the frame of a document shown
+ * in one. Null for other nodes, and for `top`, the recorded document, whose own frame is not recorded.
+ */
+export function containerOf(root: Node, top: Document): Element | null {
+    if (isShadowRoot(root)) {
+        return root.host
+    }
+    return isDocument(root) && root !== top ? (root.defaultView?.frameElement ?? null) : null
 }
 
 /** Whether the recorder writes this kind of node at all. Processing instructions are left out. */
@@ -79,6 +95,11 @@ export function isFormControl(node: Node): node is FormControl {
 
 export function isForm(node: Node): node is HTMLFormElement {
     return isHtml(node, 'form')
+}
+
+/** `<iframe>` and `<frame>`, whose content is another document. */
+export function isFrame(node: Node): node is HTMLIFrameElement | HTMLFrameElement {
+    return isHtml(node, 'iframe') || isHtml(node, 'frame')
 }
 
 /** Checkboxes and radio buttons, whose state is `checked` rather than a value. */
