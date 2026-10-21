@@ -1,4 +1,5 @@
 import type { EventWriter } from '@timecat-js/protocol'
+import { findBlobUrls } from './assets.ts'
 import {
     HTML_NAMESPACE,
     isComment,
@@ -9,6 +10,7 @@ import {
     isFrame,
     isInput,
     isShadowRoot,
+    isStyle,
     isText,
     recordsChildren
 } from './dom.ts'
@@ -76,6 +78,10 @@ export class TreeWriter {
     readonly controls: FormControl[] = []
     /** Elements written with a scroll offset, when reading them was requested. The caller empties it. */
     readonly scrolled: Element[] = []
+    /** `<style>` elements written, whose sheets script may have changed. The caller empties it. */
+    readonly styles: (HTMLStyleElement | SVGStyleElement)[] = []
+    /** `blob:` URLs in the attributes written. The caller empties it. */
+    readonly urls: string[] = []
     /**
      * Whether to look for scrolled elements, which takes layout. Elements a page inserts are not scrolled yet,
      * unlike those of a snapshot, or of a document that loaded into a frame.
@@ -244,10 +250,14 @@ export class TreeWriter {
         for (let i = 0; i < count; i++) {
             const attribute = attributes[i]!
             const name = attribute.name
-            writer.attribute(name, masksValue && name === 'value' ? maskValue(attribute.value) : attribute.value)
+            const value = masksValue && name === 'value' ? maskValue(attribute.value) : attribute.value
+            writer.attribute(name, value)
+            findBlobUrls(value, this.urls)
         }
         if (control !== undefined) {
             this.controls.push(control)
+        } else if (tag === 'style' && isStyle(element)) {
+            this.styles.push(element)
         }
         if (this.readScroll && (element.scrollTop !== 0 || element.scrollLeft !== 0)) {
             this.scrolled.push(element)

@@ -19,7 +19,7 @@
         "path": "packages/recorder/dist/index.js",
         "import": "{ record }",
         "gzip": true,
-        "limit": "18 kB"
+        "limit": "19 kB"
     },
     {
         "name": "@timecat-js/player-core (lazy chunks and worker included)",

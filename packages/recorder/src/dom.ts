@@ -2,6 +2,7 @@
 // iframe), where `instanceof HTMLInputElement` of the recorder's own window would be false.
 
 export const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml'
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg'
 
 const ELEMENT_NODE = 1
 const TEXT_NODE = 3
@@ -117,7 +118,11 @@ export function recordsChildren(element: Element): boolean {
     return name !== 'script' && !(name === 'noscript' && element.namespaceURI === HTML_NAMESPACE)
 }
 
-/** Text in `<style>` is CSS, which masking would break. */
-export function isStyle(element: Element): boolean {
-    return element.localName === 'style'
+/** `<style>`, in HTML or SVG: its text is CSS. */
+export function isStyle(node: Node): node is HTMLStyleElement | SVGStyleElement {
+    if (!isElement(node) || node.localName !== 'style') {
+        return false
+    }
+    const namespace = node.namespaceURI
+    return namespace === HTML_NAMESPACE || namespace === SVG_NAMESPACE
 }

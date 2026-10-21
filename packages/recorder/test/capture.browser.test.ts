@@ -14,6 +14,7 @@ describe('Capture', () => {
             now: () => 0,
             sliceMs: 60_000,
             checkEvery: 64,
+            assetBudget: 0,
             yieldToPage: () => Promise.resolve(),
             scheduleFlush: () => {
                 scheduled++

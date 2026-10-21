@@ -1,8 +1,9 @@
 # @timecat-js/recorder
 
-The TimeCat session recorder: it records what happens in a page (DOM changes, form input, pointer, scrolling, the
-viewport and same-document navigation), its shadow trees and same-origin frames included, as a TCR recording, which
-`@timecat-js/player-core` replays. The main thread only reads the page and encodes what changed; compression and
+The TimeCat session recorder: it records what happens in a page (DOM and style sheet changes, form input, pointer,
+scrolling, the viewport and same-document navigation), its shadow trees and same-origin frames included, as a TCR
+recording, which `@timecat-js/player-core` replays. Fonts that script adds, and the content of `blob:` URLs, which is
+gone with the page, are recorded too. The main thread only reads the page and encodes what changed; compression and
 storage run in a worker.
 
 > Pre-release. The API and the recording format may change without notice until 1.0.
@@ -33,6 +34,7 @@ stream; `export()` returns the recording so far without stopping.
 | `block` | none | Selector of elements recorded as empty placeholders of the same size. |
 | `ignore` | none | Selector of elements whose form input is not recorded, inside them included. |
 | `unmaskInputs` | none | Selector of form controls whose values are recorded as typed. Every other value is masked, its length kept, and passwords are masked even when they match. |
+| `assetBudget` | 8 MiB | Bytes of `blob:` content and of fonts given as bytes that the recording keeps, all together. Content that does not fit in what is left is not recorded; `0` records none. |
 | `storage` | `'memory'` | Where finished chunks are kept until `export` or `stop`: `'memory'`, or `'opfs'`, the origin private file system, where a recording outlives a crashed page. OPFS needs the worker. |
 | `worker` | `true` | Where encoding, compression and storage run. `true` starts a worker from a bundled script through a `blob:` URL; a URL starts the worker script published as `@timecat-js/recorder/worker` from there; `false` uses the main thread. When a worker cannot start, the main thread takes over without losing data. |
 | `sessionId` | random | Id shared by the segments of one session, such as the pages of one visit. |
@@ -84,6 +86,17 @@ are looked for once a document is parsed. Frames are checked for a new document 
 when they load; a document the recorder cannot read, as a cross-origin one, leaves the frame empty. Pointer
 positions in frames are converted to the page's viewport.
 
+**Style sheets, fonts and `blob:` content.** Changes that script makes to style sheets through the CSSOM are caught
+by wrapping `insertRule`, `deleteRule` and the other methods that change rules, in each realm. A sheet is written
+whole the first time, then as the top-level rules inserted and deleted; a rule changed inside, as by `setProperty`,
+is written as deleted and inserted again. A sheet is written whole again when that is no longer than its changes, or
+when changes made where no wrapper sees them leave the rules apart. `<style>` elements without text, whose rules
+script inserted as CSS-in-JS libraries do, are written whole with the snapshot. Constructed sheets are written once a
+document or shadow root adopts them, which wrapping `adoptedStyleSheets` reports. Font faces that script makes and
+adds to a document's fonts are written with their source, URLs made absolute. The `blob:` URLs in what is written
+(attributes, style text, rules and font sources) are read in the background, once each, and written as assets that
+replays serve in their place; `export()` and `stop()` wait for those reads.
+
 **Encoding.** Events are encoded into the binary TCR format as they are written, with ids implied by the order of
 nodes and strings shared through tables, and handed to the worker in batches, without a copy. The worker groups
 events into chunks per track, compresses them where that pays, and keeps them in memory or OPFS.
@@ -106,8 +119,15 @@ Chrome and Edge 111, Firefox 115, Safari 16.4 and later.
 - Pointer positions in frames ignore CSS transforms of the frames.
 - `document.open()` on the page itself keeps the page's mode (quirks or standards) as the snapshot found it; frames
   are written anew in their new mode.
-- Style sheet changes made through the CSSOM (`insertRule`, constructed style sheets) are not recorded; changes to
-  `<style>` and `<link>` elements are.
+- The sheets of `<style>` elements with text are taken to hold the rules of their text: CSSOM changes made to them
+  before recording started are not recorded. Changes made through the CSSOM to the sheets of `<link>` elements and
+  `@import` rules are not recorded.
+- Changes to the declarations of rules through named properties, as `rule.style.color = 'red'`, are not recorded;
+  `setProperty`, `removeProperty` and `cssText` are.
+- Script that keeps the array of `adoptedStyleSheets` and changes it in a later task is seen once script reads or
+  sets `adoptedStyleSheets` again.
+- Font faces made before recording started, or in a frame before its document was recorded, are not recorded.
+- `blob:` content beyond `assetBudget`, and media source URLs, are not recorded.
 - Hover and focus states, text selection and the top layer (open dialogs and popovers) are not recorded.
 - Script content is not recorded: replays never run it.
 

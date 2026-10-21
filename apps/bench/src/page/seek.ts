@@ -29,6 +29,7 @@ window.timecatSeek = {
             now: () => time,
             sliceMs: 60_000,
             checkEvery: 64,
+            assetBudget: 0,
             yieldToPage: () => Promise.resolve(),
             scheduleFlush: () => noop,
             onHidden: noop,

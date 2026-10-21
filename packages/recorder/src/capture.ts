@@ -7,6 +7,7 @@ import {
     PointerAction,
     Track
 } from '@timecat-js/protocol'
+import { AssetRecorder } from './assets.ts'
 import type { EventSink } from './batch.ts'
 import {
     containerOf,
@@ -20,8 +21,10 @@ import {
     isOption,
     isPointerEvent,
     isSelect,
+    isStyle,
     isTextArea
 } from './dom.ts'
+import { FontRecorder } from './fonts.ts'
 import { NodeIds } from './ids.ts'
 import { InputRecorder } from './inputs.ts'
 import { MutationBuffer, MutationWriter } from './mutations.ts'
@@ -29,7 +32,9 @@ import { MAX_MOVES_SPAN, PointerRecorder, pointerTypeOf } from './pointer.ts'
 import { Privacy, TextMask } from './privacy.ts'
 import type { PrivacyOptions } from './privacy.ts'
 import { RealmHooker } from './realm.ts'
+import type { RealmHooks } from './realm.ts'
 import { ScrollRecorder } from './scroll.ts'
+import { SheetRecorder } from './sheets.ts'
 import { TreeWriter } from './tree.ts'
 import type { InnerRoot, Scope } from './tree.ts'
 
@@ -42,6 +47,8 @@ export interface CaptureOptions extends PrivacyOptions {
     sliceMs: number
     /** Nodes the snapshot writes between looks at the clock. */
     checkEvery: number
+    /** Bytes of `blob:` content and font data recorded, all together. */
+    assetBudget: number
     /** Lets the page run between snapshot slices. */
     yieldToPage: () => Promise<void>
     /** Runs `flush` soon. Returns a function that cancels it. */
@@ -103,6 +110,9 @@ export class Capture implements EventListenerObject, Scope {
     readonly #inputs: InputRecorder
     readonly #pointer: PointerRecorder
     readonly #scroll: ScrollRecorder
+    readonly #sheets: SheetRecorder
+    readonly #fonts: FontRecorder
+    readonly #assets: AssetRecorder
     readonly #observer: MutationObserver
     readonly #listeners = new AbortController()
     readonly #listenerOptions: AddEventListenerOptions = {
@@ -123,6 +133,8 @@ export class Capture implements EventListenerObject, Scope {
     readonly #modes = new WeakMap<Document, string>()
     /** Where the viewports of frames' documents are in the page's viewport, until the layout may change. */
     readonly #offsets = new Map<Document, readonly [x: number, y: number] | null>()
+    /** `<style>` elements written or whose text changed in a flush, whose sheets are new. */
+    readonly #styles = new Set<HTMLStyleElement | SVGStyleElement>()
     /** Flushes wait while the snapshot runs: the ids they would refer to are still being assigned. */
     #snapshotting = true
     #stopped = false
@@ -143,6 +155,9 @@ export class Capture implements EventListenerObject, Scope {
         this.#inputs = new InputRecorder(this.#ids, this.#privacy, this)
         this.#pointer = new PointerRecorder(options.sink)
         this.#scroll = new ScrollRecorder(this.#ids, this)
+        this.#sheets = new SheetRecorder(this.#ids, this)
+        this.#assets = new AssetRecorder({ sink: options.sink, now: options.now, budget: options.assetBudget })
+        this.#fonts = new FontRecorder(this.#assets)
         this.#observer = new MutationObserver(records => {
             this.#buffer.push(records)
             this.#requestFlush()
@@ -154,7 +169,7 @@ export class Capture implements EventListenerObject, Scope {
      * is written. If the snapshot fails, the error is reported and capturing stops.
      */
     start(): Promise<void> {
-        this.#realms = new RealmHooker({ formSet: this.#onFormSet, shadowAttached: this.#onShadowAttached })
+        this.#realms = new RealmHooker(this.#hooks)
         this.enter(this.#document)
         return this.#snapshot().catch((error: unknown) => {
             this.#options.onError(error)
@@ -183,6 +198,7 @@ export class Capture implements EventListenerObject, Scope {
             // A document can be scrolled by the time it is written.
             this.#scroll.mark(root)
         }
+        this.#sheets.entered(root)
         if (this.#watched.has(root)) {
             return
         }
@@ -190,6 +206,7 @@ export class Capture implements EventListenerObject, Scope {
         this.#observer.observe(root, OBSERVE)
         if (isDocument(root)) {
             this.#listenToWindow(root)
+            this.#fonts.watch(root)
         } else {
             this.#listen(root, SHADOW_EVENTS)
         }
@@ -222,6 +239,11 @@ export class Capture implements EventListenerObject, Scope {
         this.#write(this.#options.now(), force)
     }
 
+    /** Settles once the `blob:` content met so far is recorded. */
+    settled(): Promise<void> {
+        return this.#assets.settled()
+    }
+
     /** Writes the last changes and detaches from the page. */
     stop(): void {
         if (this.#stopped) {
@@ -232,6 +254,7 @@ export class Capture implements EventListenerObject, Scope {
         this.#observer.disconnect()
         this.#listeners.abort()
         this.#realms?.unhook()
+        this.#assets.stop()
         this.#cancelFlush?.()
         this.#cancelFlush = undefined
         clearTimeout(this.#movesTimer)
@@ -361,6 +384,10 @@ export class Capture implements EventListenerObject, Scope {
         for (const element of tree.scrolled) {
             this.#scroll.mark(element)
         }
+        for (const style of tree.styles) {
+            this.#styles.add(style)
+        }
+        this.#assets.request(tree.urls)
         this.#snapshotting = false
         this.#write(time, false)
     }
@@ -388,10 +415,15 @@ export class Capture implements EventListenerObject, Scope {
                     for (const element of mutations.scrolled) {
                         this.#scroll.mark(element)
                     }
+                    for (const style of mutations.styles) {
+                        this.#styles.add(style)
+                    }
+                    this.#assets.request(mutations.urls)
                 } finally {
                     buffer.clear()
                 }
             }
+            this.#writeStyles(time)
             const input = this.#inputs.write()
             if (input !== undefined) {
                 sink.event(Track.Input, EventType.Input, time, input)
@@ -410,6 +442,28 @@ export class Capture implements EventListenerObject, Scope {
         // Changes may have moved frames in the viewport.
         this.#offsets.clear()
         this.#awaitMoves()
+    }
+
+    /** Writes what script changed of style sheets, and the font faces it added. */
+    #writeStyles(time: number): void {
+        const sheets = this.#sheets
+        const styles = this.#styles
+        for (const style of styles) {
+            if (this.#ids.has(style) && this.contains(style)) {
+                sheets.styleWritten(style)
+            }
+        }
+        styles.clear()
+        sheets.write(this.#sink, time)
+        const fonts = this.#fonts
+        fonts.write(this.#sink, time)
+        const assets = this.#assets
+        assets.request(sheets.urls)
+        assets.request(fonts.urls)
+        sheets.urls.length = 0
+        fonts.urls.length = 0
+        // Every URL written is requested by now, so the blobs of revoked ones can go.
+        assets.forget()
     }
 
     /**
@@ -555,13 +609,16 @@ export class Capture implements EventListenerObject, Scope {
      * changes a control, or after its form is reset, its value follows its default: the `value` attribute, the
      * `checked` attribute, the text of a `<textarea>`. The replay sets the state of controls it was recorded
      * for, after which it no longer follows the default, so the recording has to say when the state changes
-     * this way.
+     * this way. It also notes `<style>` elements whose text changed, which makes them a new sheet.
      */
     #markControls(buffer: MutationBuffer): void {
         const inputs = this.#inputs
+        const styles = this.#styles
         for (const parent of buffer.parents) {
             if (isSelect(parent) || isOptGroup(parent) || isTextArea(parent)) {
                 inputs.invalidate(parent)
+            } else if (isStyle(parent)) {
+                styles.add(parent)
             }
         }
         for (const [element, names] of buffer.attributes) {
@@ -576,8 +633,13 @@ export class Capture implements EventListenerObject, Scope {
         }
         for (const node of buffer.texts) {
             const parent = node.parentNode
-            if (parent !== null && isTextArea(parent)) {
+            if (parent === null) {
+                continue
+            }
+            if (isTextArea(parent)) {
                 inputs.invalidate(parent)
+            } else if (isStyle(parent)) {
+                styles.add(parent)
             }
         }
     }
@@ -617,26 +679,58 @@ export class Capture implements EventListenerObject, Scope {
         this.#requestFlush()
     }
 
-    // The hooks serve every document of their realm, recorded or not.
-
-    readonly #onFormSet = (node: Node): void => {
-        if (!this.#stopped && this.contains(node)) {
-            this.#inputs.mark(node)
-            this.#requestFlush()
-        }
-    }
-
-    readonly #onShadowAttached = (host: Element, root: ShadowRoot): void => {
-        if (this.#stopped) {
-            return
-        }
-        if (root.mode === 'closed') {
-            // The host may be inserted later, and only this hook sees the root.
-            this.#closedRoots.set(host, root)
-        }
-        if (this.contains(host)) {
-            this.#buffer.added.add(root)
-            this.#requestFlush()
+    // The hooks serve everything of their realm, recorded or not.
+    readonly #hooks: RealmHooks = {
+        formSet: node => {
+            if (!this.#stopped && this.contains(node)) {
+                this.#inputs.mark(node)
+                this.#requestFlush()
+            }
+        },
+        shadowAttached: (host, root) => {
+            if (this.#stopped) {
+                return
+            }
+            if (root.mode === 'closed') {
+                // The host may be inserted later, and only this hook sees the root.
+                this.#closedRoots.set(host, root)
+            }
+            if (this.contains(host)) {
+                this.#buffer.added.add(root)
+                this.#requestFlush()
+            }
+        },
+        sheetChanged: (sheet, index, deleted) => {
+            if (!this.#stopped) {
+                this.#sheets.sheetChanged(sheet, index, deleted)
+                this.#requestFlush()
+            }
+        },
+        ruleChanged: rule => {
+            if (!this.#stopped) {
+                this.#sheets.ruleChanged(rule)
+                this.#requestFlush()
+            }
+        },
+        adoptedSheetsUsed: root => {
+            if (!this.#stopped && this.#sheets.adoptedSheetsUsed(root)) {
+                this.#requestFlush()
+            }
+        },
+        fontFaceCreated: (face, source, base) => {
+            if (!this.#stopped) {
+                this.#fonts.created(face, source, base)
+            }
+        },
+        fontFaceAdded: (fonts, face) => {
+            if (!this.#stopped && this.#fonts.added(fonts, face)) {
+                this.#requestFlush()
+            }
+        },
+        objectUrl: (url, object) => {
+            if (!this.#stopped) {
+                this.#assets.objectUrl(url, object)
+            }
         }
     }
 }

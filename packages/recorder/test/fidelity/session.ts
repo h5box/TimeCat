@@ -19,6 +19,7 @@ export interface SessionOptions extends PrivacyOptions {
      */
     betweenSlices?: (document: Document, slice: number) => void
     checkEvery?: number
+    assetBudget?: number
 }
 
 /** What the recorded page showed at a time. */
@@ -74,6 +75,7 @@ export class Session {
             // Without a callback, the snapshot takes one slice.
             sliceMs: between === undefined ? 60_000 : 0,
             checkEvery: options.checkEvery ?? 64,
+            assetBudget: options.assetBudget ?? 8 * 1024 * 1024,
             yieldToPage: () => {
                 between?.(this.document, slice++)
                 return Promise.resolve()
@@ -128,8 +130,10 @@ export class Session {
         this.#time++
     }
 
-    /** Stops recording and returns the recording. */
+    /** Stops recording, once the content of `blob:` URLs is read, and returns the recording. */
     async finish(): Promise<Uint8Array<ArrayBuffer>> {
+        this.flush()
+        await this.#capture.settled()
         await this.close()
         return concat(this.#parts)
     }

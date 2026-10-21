@@ -1,11 +1,23 @@
 import { EventType, NodeKind, PointerAction } from '@timecat-js/protocol'
-import type { AddedRun, SerializedNode } from '@timecat-js/protocol'
+import type { SerializedNode } from '@timecat-js/protocol'
 import { afterEach, describe, expect, it } from 'vitest'
-import { decodeRecording, eventsOf } from './decode.ts'
-import type { DecodedEvent } from './decode.ts'
-import { isElement, isInput } from './fidelity/describe.ts'
+import { eventsOf } from './decode.ts'
+import { isInput } from './fidelity/describe.ts'
 import { closeSessions, Session } from './fidelity/session.ts'
 import type { SessionOptions } from './fidelity/session.ts'
+import {
+    byId,
+    contentOf,
+    find,
+    finish,
+    frameById,
+    idOf,
+    loaded,
+    runs,
+    runScript,
+    snapshotRoot,
+    withId
+} from './helpers.ts'
 
 afterEach(closeSessions)
 
@@ -37,69 +49,6 @@ function outline(node: SerializedNode, depth = 0): string[] {
     }
 }
 
-/** The id of the first node, in tree order, that `match` accepts. */
-function idOf(root: SerializedNode, match: (node: SerializedNode) => boolean): number {
-    const found = find(root, match)
-    if (found === undefined) {
-        throw new Error('no such node')
-    }
-    return found.id
-}
-
-function find(node: SerializedNode, match: (node: SerializedNode) => boolean): SerializedNode | undefined {
-    if (match(node)) {
-        return node
-    }
-    if (node.kind === NodeKind.Element || node.kind === NodeKind.Document || node.kind === NodeKind.ShadowRoot) {
-        for (const child of node.children) {
-            const found = find(child, match)
-            if (found !== undefined) {
-                return found
-            }
-        }
-    }
-    return undefined
-}
-
-/** Matches the element with the id attribute `id`. */
-function withId(id: string): (node: SerializedNode) => boolean {
-    return node =>
-        node.kind === NodeKind.Element &&
-        node.attributes.some((value, i) => i % 2 === 1 && value === id && node.attributes[i - 1] === 'id')
-}
-
-function byId(document: Document | ShadowRoot, id: string): Element {
-    const element = document.getElementById(id)
-    if (element === null) {
-        throw new Error(`no #${id}`)
-    }
-    return element
-}
-
-function isFrame(node: Node): node is HTMLIFrameElement {
-    return isElement(node) && node.localName === 'iframe'
-}
-
-function frameById(document: Document, id: string): HTMLIFrameElement {
-    const element = byId(document, id)
-    if (!isFrame(element)) {
-        throw new Error(`#${id} is no frame`)
-    }
-    return element
-}
-
-function contentOf(frame: HTMLIFrameElement): Document {
-    const content = frame.contentDocument
-    if (content === null) {
-        throw new Error('the frame shows no document')
-    }
-    return content
-}
-
-function loaded(frame: HTMLIFrameElement): Promise<void> {
-    return new Promise(resolve => frame.addEventListener('load', () => resolve(), { once: true }))
-}
-
 function frames(count: number): Promise<void> {
     return new Promise(resolve => {
         const next = (left: number): void => {
@@ -111,32 +60,6 @@ function frames(count: number): Promise<void> {
         }
         next(count)
     })
-}
-
-/** Runs script in the page's own realm, as the page's scripts run. */
-function runScript(document: Document, source: string): void {
-    const script = document.createElement('script')
-    script.textContent = source
-    document.body.append(script)
-    script.remove()
-}
-
-async function finish(session: Session): Promise<DecodedEvent[]> {
-    const recording = await session.finish()
-    expect(session.errors).toEqual([])
-    return (await decodeRecording(recording)).events
-}
-
-function snapshotRoot(events: readonly DecodedEvent[]): SerializedNode {
-    const [snapshot] = eventsOf(events, EventType.Snapshot)
-    if (snapshot === undefined) {
-        throw new Error('no snapshot')
-    }
-    return snapshot.root
-}
-
-function runs(events: readonly DecodedEvent[]): AddedRun[] {
-    return eventsOf(events, EventType.Mutations).flatMap(event => event.adds)
 }
 
 const PAGE: SessionOptions = {

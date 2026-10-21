@@ -1,4 +1,5 @@
 import { ByteWriter, EventWriter } from '@timecat-js/protocol'
+import { findBlobUrls } from './assets.ts'
 import {
     HTML_NAMESPACE,
     isComment,
@@ -112,6 +113,16 @@ export class MutationWriter {
         return this.#tree.scrolled
     }
 
+    /** `<style>` elements the last `write` added. */
+    get styles(): (HTMLStyleElement | SVGStyleElement)[] {
+        return this.#tree.styles
+    }
+
+    /** `blob:` URLs in the attributes the last `write` wrote. */
+    get urls(): string[] {
+        return this.#tree.urls
+    }
+
     /** Returns undefined when no recorded node changed. */
     write(buffer: MutationBuffer): Uint8Array<ArrayBuffer> | undefined {
         const ids = this.#ids
@@ -124,6 +135,8 @@ export class MutationWriter {
         writer.reset()
         tree.controls.length = 0
         tree.scrolled.length = 0
+        tree.styles.length = 0
+        tree.urls.length = 0
 
         const added = buffer.added
         const removes: number[] = []
@@ -228,8 +241,11 @@ export class MutationWriter {
                 } else {
                     value = element.getAttributeNS(null, key)
                 }
-                if (masksValue && name === 'value' && value !== null) {
-                    value = maskValue(value)
+                if (value !== null) {
+                    if (masksValue && name === 'value') {
+                        value = maskValue(value)
+                    }
+                    findBlobUrls(value, tree.urls)
                 }
                 writer.attributeChange(id, name, value)
                 attributeCount++

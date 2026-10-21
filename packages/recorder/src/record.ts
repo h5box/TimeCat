@@ -18,6 +18,12 @@ export interface RecordOptions extends PrivacyOptions {
      * worker cannot start, the main thread takes over without losing data.
      */
     worker?: boolean | string | URL | undefined
+    /**
+     * Bytes of `blob:` content and font data the recording keeps, all together: such content is gone once the page
+     * is, so the recording keeps a copy. Content that does not fit in what is left is not recorded. 8 MiB by
+     * default; 0 records none.
+     */
+    assetBudget?: number | undefined
     /** Id shared by the segments of one session. Random by default. */
     sessionId?: string | undefined
     /** Index of this page load within the session, from 0. */
@@ -48,6 +54,7 @@ export interface Recorder {
 /** Longest time slice of the snapshot. Well below the 50 ms that make a long task. */
 const SLICE_MS = 8
 const CHECK_EVERY = 64
+const ASSET_BUDGET = 8 * 1024 * 1024
 
 /**
  * Starts recording the current page. Throws when an option is invalid, such as a selector that does not parse.
@@ -56,6 +63,10 @@ export function record(options: RecordOptions = {}): Recorder {
     const segment = options.segment ?? 0
     if (!Number.isSafeInteger(segment) || segment < 0) {
         throw new RangeError(`segment must be a non-negative integer, got ${segment}`)
+    }
+    const assetBudget = options.assetBudget ?? ASSET_BUDGET
+    if (!(assetBudget >= 0)) {
+        throw new RangeError(`assetBudget must be a non-negative number, got ${assetBudget}`)
     }
     // A copy that is plain JSON, as the header stores it; also fails early on values JSON cannot hold.
     const meta: Record<string, unknown> = JSON.parse(JSON.stringify(options.meta ?? {}))
@@ -73,6 +84,7 @@ export function record(options: RecordOptions = {}): Recorder {
         now: () => Math.round(performance.now() - origin),
         sliceMs: SLICE_MS,
         checkEvery: CHECK_EVERY,
+        assetBudget,
         yieldToPage,
         scheduleFlush: afterTask,
         onHidden: () => client.flush(),
@@ -98,10 +110,13 @@ export function record(options: RecordOptions = {}): Recorder {
         async export() {
             await ready
             capture.flush(true)
+            await capture.settled()
             return client.export()
         },
         stop() {
-            stopped ??= ready.then(() => {
+            stopped ??= ready.then(async () => {
+                capture.flush(true)
+                await capture.settled()
                 capture.stop()
                 return client.stop()
             })
