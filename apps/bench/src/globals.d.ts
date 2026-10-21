@@ -12,11 +12,18 @@ declare global {
         timecatBench?: BenchState
         /** UMD global of @rrweb/record. */
         rrwebRecord?: {
-            record: (options: { emit: (event: unknown) => void; maskAllInputs?: boolean }) => (() => void) | undefined
+            record: (options: {
+                emit: (event: unknown) => void
+                maskAllInputs?: boolean
+                recordCanvas?: boolean
+                sampling?: { canvas?: number }
+                dataURLOptions?: { type?: string; quality?: number }
+            }) => (() => void) | undefined
         }
         /** Set by the init script of the `timecat` adapter (src/page/timecat.ts). */
         timecat?: {
-            record: () => TimeCatRecorder
+            /** Starts recording, with plugin-canvas when `canvas` is set. */
+            record: (canvas: boolean) => TimeCatRecorder
             recorder: TimeCatRecorder | undefined
             /** Events in a recording, and its size with every chunk uncompressed. */
             summarize: (blob: Blob) => Promise<{ events: number; rawBytes: number }>

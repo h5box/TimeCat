@@ -5,6 +5,8 @@ export interface Scenario {
     description: string
     /** Fixture path and query, served from http://bench.local/. */
     fixture: string
+    /** Records canvases, as each recorder can: TimeCat with plugin-canvas, rrweb with `recordCanvas`. */
+    canvas?: boolean
     /** User actions after recording starts. Each scenario does a fixed amount of work, not a fixed duration. */
     run: (page: Page) => Promise<void>
 }
@@ -62,6 +64,15 @@ export const scenarios: Scenario[] = [
                 }
                 await page.waitForTimeout(16)
             }
+        }
+    },
+    {
+        name: 'canvas',
+        description: '300 animation frames of a 960x540 2D canvas, which the recorders record at 15 fps',
+        fixture: 'canvas.html',
+        canvas: true,
+        run: async page => {
+            await page.evaluate(() => window.benchScenario?.run(300))
         }
     }
 ]

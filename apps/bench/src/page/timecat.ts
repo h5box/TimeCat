@@ -1,9 +1,10 @@
 // Init script of the `timecat` recorder adapter: the recorder as a global, and a summary of what it recorded.
 import { ChunkFlag, ChunkKind, gunzip, readEventFrames, readFile } from '@timecat-js/protocol'
+import { canvasPlugin } from '@timecat-js/plugin-canvas'
 import { record } from '@timecat-js/recorder'
 
 window.timecat = {
-    record,
+    record: canvas => record(canvas ? { plugins: [canvasPlugin()] } : {}),
     recorder: undefined,
     async summarize(blob) {
         const bytes = new Uint8Array(await blob.arrayBuffer())

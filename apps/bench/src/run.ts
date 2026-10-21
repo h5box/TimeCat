@@ -111,7 +111,7 @@ async function measure(target: Browser, scenario: Scenario, recorder: RecorderAd
         }
 
         const before = await mainThreadTime(cdp)
-        const startMs = await page.evaluate(recorder.start)
+        const startMs = await page.evaluate(recorder.start, { canvas: scenario.canvas ?? false })
         await scenario.run(page)
         if (recorder.settle) {
             await page.evaluate(recorder.settle)

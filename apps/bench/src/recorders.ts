@@ -12,6 +12,11 @@ export interface RecordedData {
     serializeMs: number
 }
 
+/** What a scenario asks of the recorders. */
+export interface StartOptions {
+    canvas: boolean
+}
+
 /**
  * A recorder under test. `start`, `settle` and `stop` are serialized and run inside the page, so they must not
  * capture anything from the Node side.
@@ -21,7 +26,7 @@ export interface RecorderAdapter {
     /** Bundle injected before any page script runs. */
     initScript?: { path: string } | { content: string }
     /** Starts recording and resolves with how long the start call blocked the main thread. */
-    start: () => number | Promise<number>
+    start: (options: StartOptions) => number | Promise<number>
     /**
      * Resolves once the recorder has done its main-thread work for what the scenario did, such as a snapshot
      * taken in slices, so that it counts.
@@ -53,7 +58,7 @@ const none: RecorderAdapter = {
 const rrweb: RecorderAdapter = {
     name: 'rrweb',
     initScript: { path: rrwebUmd },
-    start: () => {
+    start: options => {
         const bench = window.timecatBench
         const rrwebRecord = window.rrwebRecord
         if (!bench || !rrwebRecord) {
@@ -63,7 +68,18 @@ const rrweb: RecorderAdapter = {
             const startedAt = performance.now()
             bench.recordStart = startedAt
             // maskAllInputs matches TimeCat's privacy default, so both recorders do the same work on inputs.
-            bench.stop = rrwebRecord.record({ emit: event => bench.events.push(event), maskAllInputs: true })
+            // Canvases are sampled at plugin-canvas's frame rate, as WebP, which rrweb's documentation suggests.
+            bench.stop = rrwebRecord.record({
+                emit: event => bench.events.push(event),
+                maskAllInputs: true,
+                ...(options.canvas
+                    ? {
+                          recordCanvas: true,
+                          sampling: { canvas: 15 },
+                          dataURLOptions: { type: 'image/webp', quality: 0.6 }
+                      }
+                    : {})
+            })
             return performance.now() - startedAt
         })
     },
@@ -86,7 +102,7 @@ const rrweb: RecorderAdapter = {
 const timecat: RecorderAdapter = {
     name: 'timecat',
     initScript: { content: await bundlePage('timecat.ts') },
-    start: () => {
+    start: options => {
         const bench = window.timecatBench
         const api = window.timecat
         if (!bench || !api) {
@@ -96,7 +112,7 @@ const timecat: RecorderAdapter = {
             const startedAt = performance.now()
             bench.recordStart = startedAt
             // Inputs are masked by default, as rrweb's are with maskAllInputs.
-            api.recorder = api.record()
+            api.recorder = api.record(options.canvas)
             return performance.now() - startedAt
         })
     },

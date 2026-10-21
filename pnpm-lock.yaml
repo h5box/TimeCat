@@ -274,6 +274,9 @@ importers:
       '@timecat-js/player-core':
         specifier: workspace:^
         version: link:../../packages/player-core
+      '@timecat-js/plugin-canvas':
+        specifier: workspace:^
+        version: link:../../packages/plugin-canvas
       '@timecat-js/protocol':
         specifier: workspace:^
         version: link:../../packages/protocol

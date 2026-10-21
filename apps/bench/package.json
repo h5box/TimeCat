@@ -12,6 +12,7 @@
     "devDependencies": {
         "@rrweb/record": "catalog:",
         "@timecat-js/player-core": "workspace:^",
+        "@timecat-js/plugin-canvas": "workspace:^",
         "@timecat-js/protocol": "workspace:^",
         "@timecat-js/recorder": "workspace:^",
         "@types/node": "catalog:",

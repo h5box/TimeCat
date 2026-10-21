@@ -29,6 +29,7 @@ pnpm bench:seek --live-rows 10               # 看板只有前 10 行在变，�
 | `mutations` | 实时行情看板 | 300 帧：每帧改 20 个单元格、切换 10 行的 class、更新 1 个 style 动画，每 30 帧插入并移除列表项 |
 | `typing` | 结账表单 | 8 个输入框共 191 次按键，加 1 次下拉选择和 1 次勾选 |
 | `pointer-scroll` | 400 张商品卡片 | 以约 60Hz 移动指针 300 次，滚轮 20 次 |
+| `canvas` | 960×540 的 2D Canvas 动画：渐变背景、120 个移动的标记和帧号 | 画 300 帧，每个动画帧一帧；录制器按 15 fps 录 Canvas |
 
 每个场景完成**固定的工作量**，而不是持续固定的时长：录制器拖慢页面时，工作量不变，CPU 时间才有可比性。夹具里的随机数用固定种子生成，每次运行的变更完全相同。
 
@@ -39,6 +40,8 @@ pnpm bench:seek --live-rows 10               # 看板只有前 10 行在变，�
 | `none` | 对照组：同样的页面和操作，不录制 |
 | `rrweb` | `@rrweb/record` 2.1.7，开启 `maskAllInputs`，和 TimeCat 默认的隐私设置一致 |
 | `timecat` | `@timecat-js/recorder` 的 `record()`，默认选项，连同 Worker 从源码打包 |
+
+`canvas` 场景里两个录制器都录 Canvas：TimeCat 加上 `@timecat-js/plugin-canvas`（默认 15 fps），rrweb 开启 `recordCanvas`，按同样的 15 fps 采样，用 rrweb 文档建议的 WebP（质量 0.6）。
 
 ### 指标
 
