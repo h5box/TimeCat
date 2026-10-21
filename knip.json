@@ -6,6 +6,10 @@
         },
         "packages/*": {
             "project": ["src/**/*.ts", "test/**/*.ts"]
+        },
+        "apps/bench": {
+            "entry": ["src/page/*.ts"],
+            "project": ["src/**/*.ts"]
         }
     },
     "ignore": ["rfcs/**"]

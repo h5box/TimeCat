@@ -1,17 +1,22 @@
 {
     "name": "@timecat-js/bench",
     "private": true,
-    "description": "Recorder benchmarks: main-thread cost, long tasks and data size on fixture pages",
+    "description": "Benchmarks: recorder main-thread cost, long tasks and data size on fixture pages, and replay seek time",
     "license": "GPL-3.0-or-later",
     "type": "module",
     "scripts": {
         "bench": "node src/run.ts",
-        "typecheck": "tsc -p ."
+        "seek": "node src/seek.ts",
+        "typecheck": "tsc -p . && tsc -p src/page"
     },
     "devDependencies": {
         "@rrweb/record": "catalog:",
+        "@timecat-js/player-core": "workspace:^",
+        "@timecat-js/protocol": "workspace:^",
+        "@timecat-js/recorder": "workspace:^",
         "@types/node": "catalog:",
         "playwright": "catalog:",
+        "rolldown": "catalog:",
         "typescript": "catalog:"
     }
 }

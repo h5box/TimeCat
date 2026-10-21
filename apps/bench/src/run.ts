@@ -1,10 +1,11 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { chromium } from 'playwright'
 import type { Browser, CDPSession } from 'playwright'
+import { FIXTURE_ORIGIN, serveFixtures } from './fixtures.ts'
 import { installHarness } from './harness.ts'
 import { recorders } from './recorders.ts'
 import type { RecordedData, RecorderAdapter } from './recorders.ts'
@@ -41,10 +42,7 @@ const selectedRecorders = pick(
     r => r.name
 )
 
-const here = path.dirname(fileURLToPath(import.meta.url))
-const fixturesDir = path.join(here, '../fixtures')
-const resultsDir = path.join(here, '../results')
-const placeholderImage = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
+const resultsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../results')
 
 // Lets local runs reuse a pre-installed Chromium instead of Playwright's pinned build.
 const executablePath = process.env.CHROMIUM_EXECUTABLE_PATH
@@ -90,23 +88,13 @@ console.log(`Results written to ${path.relative(process.cwd(), file)}`)
 async function measure(target: Browser, scenario: Scenario, recorder: RecorderAdapter): Promise<RunResult> {
     const context = await target.newContext({ viewport: { width: 1280, height: 800 } })
     try {
-        await context.route('http://bench.local/**', async route => {
-            const { pathname } = new URL(route.request().url())
-            if (pathname.startsWith('/img/')) {
-                return route.fulfill({ contentType: 'image/svg+xml', body: placeholderImage })
-            }
-            // basename() keeps requests inside the fixtures directory; anything else (e.g. /favicon.ico) is a 404.
-            const body = await readFile(path.join(fixturesDir, path.basename(pathname)), 'utf8').catch(() => undefined)
-            return body === undefined
-                ? route.fulfill({ status: 404 })
-                : route.fulfill({ contentType: 'text/html', body })
-        })
+        await serveFixtures(context)
         const page = await context.newPage()
         await page.addInitScript(installHarness)
         if (recorder.initScript) {
-            await page.addInitScript({ path: recorder.initScript })
+            await page.addInitScript(recorder.initScript)
         }
-        await page.goto(`http://bench.local/${scenario.fixture}`, { waitUntil: 'load' })
+        await page.goto(`${FIXTURE_ORIGIN}/${scenario.fixture}`, { waitUntil: 'load' })
 
         const cdp = await context.newCDPSession(page)
         await cdp.send('Performance.enable')
@@ -117,6 +105,9 @@ async function measure(target: Browser, scenario: Scenario, recorder: RecorderAd
         const before = await taskDuration(cdp)
         const startMs = await page.evaluate(recorder.start)
         await scenario.run(page)
+        if (recorder.settle) {
+            await page.evaluate(recorder.settle)
+        }
         const taskMs = (await taskDuration(cdp)) - before
 
         const longTasks = await page.evaluate(() => window.timecatBench?.longTasksSinceRecordStart() ?? [])

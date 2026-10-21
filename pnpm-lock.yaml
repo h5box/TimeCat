@@ -268,12 +268,24 @@ importers:
       '@rrweb/record':
         specifier: 'catalog:'
         version: 2.1.7
+      '@timecat-js/player-core':
+        specifier: workspace:^
+        version: link:../../packages/player-core
+      '@timecat-js/protocol':
+        specifier: workspace:^
+        version: link:../../packages/protocol
+      '@timecat-js/recorder':
+        specifier: workspace:^
+        version: link:../../packages/recorder
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.2
       playwright:
         specifier: 'catalog:'
         version: 1.64.1
+      rolldown:
+        specifier: 'catalog:'
+        version: 1.2.14
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

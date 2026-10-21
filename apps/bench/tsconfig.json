@@ -5,5 +5,7 @@
         "declaration": false,
         "types": ["node"]
     },
-    "include": ["src"]
+    "include": ["src"],
+    // Scripts that run in the page are browser code, checked with src/page/tsconfig.json.
+    "exclude": ["src/page"]
 }
