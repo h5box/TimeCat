@@ -36,6 +36,7 @@ import {
 } from './dom.ts'
 import type { LinkedSheets } from './linked-sheets.ts'
 import type { PseudoClasses } from './pseudo-classes.ts'
+import type { Resources } from './resources.ts'
 import { FOREIGN_ATTRIBUTES, INERT_SCRIPT_TYPE, sanitize } from './sanitize.ts'
 import { changeRules, ConstructedSheets } from './sheets.ts'
 import { stateAttribute } from './states.ts'
@@ -84,6 +85,8 @@ export interface MaterializerOptions {
     pseudoClasses?: PseudoClasses
     /** Rewrites the style sheets the replay links to; without, they stay as they are. */
     links?: LinkedSheets
+    /** What the recording keeps of the resources pages loaded from the web; without, they load from there. */
+    resources?: Resources
 }
 
 interface PendingScroll {
@@ -127,6 +130,8 @@ export class Materializer {
     readonly #assets: Assets
     readonly #canvases: Canvases
     readonly #links: LinkedSheets | undefined
+    readonly #resources: Resources | undefined
+    readonly #pseudoClasses: PseudoClasses | undefined
     #nodes = new Map<number, Node>()
     #version = 0
     /**
@@ -146,8 +151,6 @@ export class Materializer {
     /** Frames with a document to build in them, once they are in the replayed document. */
     readonly #pending: [HTMLIFrameElement | HTMLFrameElement, DocumentNode][] = []
     readonly #sheets: ConstructedSheets
-    /** Puts the replay's URLs for recorded ones into CSS. */
-    readonly #rewrite: (text: string) => string
     readonly #scrolls = new Map<Node, PendingScroll>()
     /** Whether the document renders in quirks mode; undefined until it is first written. */
     #quirks: boolean | undefined
@@ -155,16 +158,14 @@ export class Materializer {
     #extensionFont: boolean | undefined
 
     constructor(document: Document, options: MaterializerOptions = {}) {
-        const { assets = new Assets(), canvases = new Canvases(), pseudoClasses } = options
+        const { assets = new Assets(), canvases = new Canvases() } = options
         this.#document = document
         this.#assets = assets
         this.#canvases = canvases
         this.#links = options.links
-        this.#rewrite =
-            pseudoClasses === undefined
-                ? text => assets.rewrite(text)
-                : text => pseudoClasses.rewrite(assets.rewrite(text))
-        this.#sheets = new ConstructedSheets(this.#rewrite)
+        this.#resources = options.resources
+        this.#pseudoClasses = options.pseudoClasses
+        this.#sheets = new ConstructedSheets((text, of) => this.#css(text, of))
     }
 
     /** Changes with every change to what the document shows. */
@@ -317,7 +318,7 @@ export class Materializer {
         if (document.adoptedStyleSheets.length > 0) {
             document.adoptedStyleSheets = []
         }
-        this.#assets.addFonts(document)
+        this.#assets.addFonts(document, text => this.#urls(text, document))
         // Set before any node is made, so every URL resolves against the recorded document's from the start.
         this.#setBaseUrl(state, firstBaseHref(root))
         if (kept) {
@@ -668,6 +669,15 @@ export class Materializer {
             return false
         }
         let rewritten = this.#assets.rewrite(safe)
+        const resources = this.#resources
+        if (resources !== undefined && resources.size > 0) {
+            const replayed = resources.attribute(element, name, rewritten, () => this.#baseUrl(element.ownerDocument))
+            // A recorded sheet with its URLs replaced no longer has the hash the link asks for.
+            if (replayed !== rewritten && name === 'href' && isLink(element)) {
+                element.removeAttribute('integrity')
+            }
+            rewritten = replayed
+        }
         if (name === 'href' && this.#links !== undefined && isLink(element)) {
             rewritten = this.#links.href(element, rewritten)
         }
@@ -760,7 +770,25 @@ export class Materializer {
 
     /** The text of a node in `parent`: the text of style sheets can point at recorded URLs. */
     #text(parent: Node | null, data: string): string {
-        return parent !== null && isElement(parent) && isStyle(parent) ? this.#rewrite(data) : data
+        return parent !== null && isElement(parent) && isStyle(parent) ? this.#css(data, parent.ownerDocument) : data
+    }
+
+    /** CSS of `document` with the replay's URLs for recorded ones. */
+    #urls(text: string, document: Document): string {
+        const css = this.#assets.rewrite(text)
+        const resources = this.#resources
+        return resources === undefined || resources.size === 0 ? css : resources.css(css, this.#baseUrl(document))
+    }
+
+    /** CSS of `document` as the replay shows it: with the replay's URLs, and its states rewritten. */
+    #css(text: string, document: Document): string {
+        const css = this.#urls(text, document)
+        return this.#pseudoClasses === undefined ? css : this.#pseudoClasses.rewrite(css)
+    }
+
+    /** What URLs in `document` are relative to, as recorded. */
+    #baseUrl(document: Document): string {
+        return this.#states.get(document)?.base.getAttribute('href') ?? document.baseURI
     }
 
     #mutate(event: MutationsEvent): void {
@@ -770,6 +798,10 @@ export class Materializer {
         }
         for (const run of event.adds) {
             this.#add(run)
+        }
+        // The URLs of the attributes that change resolve against base elements just added.
+        for (const state of this.#states.values()) {
+            this.#updateBase(state)
         }
         for (const { id, name, value } of event.attributes) {
             const node = nodes.get(id)
@@ -895,7 +927,7 @@ export class Materializer {
         // None for a `<style>` that is not CSS, or out of the document.
         const sheet = node.sheet
         if (sheet !== null) {
-            changeRules(sheet, event.changes, this.#rewrite)
+            changeRules(sheet, event.changes, text => this.#css(text, node.ownerDocument))
             this.#changedSheets.add(node)
         }
     }

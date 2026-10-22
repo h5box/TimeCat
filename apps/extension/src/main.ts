@@ -13,6 +13,7 @@ import { record } from '@timecat-js/recorder'
 import type { Recorder, RecorderPlugin } from '@timecat-js/recorder'
 import { CHANNEL } from './messages.ts'
 import type { FromRecorder, Settings, StartConfig, ToRecorder } from './messages.ts'
+import { resourcesPlugin } from './resources.ts'
 
 /** Marks the page as having the recorder: the background injects it again when a page comes back from the cache. */
 const LOADED = Symbol.for('timecat-extension')
@@ -43,7 +44,7 @@ if (!Reflect.has(window, LOADED)) {
                 maskText: config.settings.maskText ? 'html' : undefined,
                 // Passwords stay masked whatever the selector.
                 unmaskInputs: config.settings.inputs ? '*' : undefined,
-                plugins: pluginsFor(config.settings),
+                plugins: pluginsFor(config.settings, to),
                 onData: bytes => send(to, { type: 'data', bytes }),
                 onError: error => send(to, { type: 'error', message: describe(error) })
             })
@@ -89,9 +90,12 @@ function send(port: MessagePort, message: FromRecorder): void {
     port.postMessage(message)
 }
 
-function pluginsFor(settings: Settings): RecorderPlugin[] {
+function pluginsFor(settings: Settings, to: MessagePort): RecorderPlugin[] {
     // How media elements play is cheap to record, and needed to replay them.
     const plugins = [mediaPlugin({ pixels: settings.video })]
+    if (settings.resources) {
+        plugins.push(resourcesPlugin(urls => send(to, { type: 'resources', urls })))
+    }
     if (settings.console) {
         plugins.push(consolePlugin())
     }

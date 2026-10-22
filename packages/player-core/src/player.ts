@@ -10,12 +10,13 @@ import type {
 } from '@timecat-js/protocol'
 import { Assets } from './assets.ts'
 import { Canvases } from './canvases.ts'
+import type * as Extras from './extras.ts'
 import type { Interaction } from './interaction.ts'
-import type * as Interactions from './interactions.ts'
 import type { LinkedSheets } from './linked-sheets.ts'
 import { Materializer } from './materializer.ts'
 import type { MediaPlayer } from './media/media.ts'
 import { pointerAt } from './pointer.ts'
+import type { Resources } from './resources.ts'
 import { Stage } from './stage.ts'
 import type { SegmentSource } from './timeline/build.ts'
 import { indexStream, loadIndex, revive } from './timeline/client.ts'
@@ -144,14 +145,14 @@ export async function createPlayer(
     const onError = options.onError ?? logError
     const loadOptions = { worker: options.worker ?? true, keyframeInterval }
     // Loads while the recording is indexed, which takes longer.
-    const interactions = import('./interactions.ts')
-    interactions.catch(ignore)
+    const extras = import('./extras.ts')
+    extras.catch(ignore)
     const stage = Stage.create(container)
     let player: ReplayPlayer
     if (isStream(source)) {
         const feed = new StreamFeed(source, loadOptions, onError)
         try {
-            player = new ReplayPlayer(await feed.timeline, await stage, speed, onError, await interactions)
+            player = new ReplayPlayer(await feed.timeline, await stage, speed, onError, await extras)
         } catch (error) {
             feed.stop()
             ;(await stage).destroy()
@@ -162,7 +163,7 @@ export async function createPlayer(
         const sources = (isList(source) ? source : [source]).map(toSegment)
         try {
             const timeline = new Timeline(await loadIndex(sources, loadOptions))
-            player = new ReplayPlayer(timeline, await stage, speed, onError, await interactions)
+            player = new ReplayPlayer(timeline, await stage, speed, onError, await extras)
         } catch (error) {
             ;(await stage).destroy()
             throw error
@@ -247,6 +248,7 @@ class ReplayPlayer extends EventTarget implements Player {
     readonly #stage: Stage
     readonly #materializer: Materializer
     readonly #assets: Assets
+    readonly #resources: Resources
     readonly #canvases = new Canvases()
     readonly #links: LinkedSheets
     readonly #interaction: Interaction
@@ -287,18 +289,21 @@ class ReplayPlayer extends EventTarget implements Player {
         stage: Stage,
         speed: number,
         onError: (error: unknown) => void,
-        interactions: typeof Interactions
+        extras: typeof Extras
     ) {
         super()
         this.#timeline = timeline
         this.#stage = stage
         this.#document = stage.document
+        const pseudoClasses = new extras.PseudoClasses()
         this.#assets = new Assets()
+        this.#resources = new extras.Resources(pseudoClasses)
         for (const statics of timeline.statics) {
-            this.#assets.add(readEvents(statics))
+            const events = readEvents(statics)
+            this.#assets.add(events)
+            this.#resources.add(events)
         }
-        const pseudoClasses = new interactions.PseudoClasses()
-        this.#links = new interactions.LinkedSheets(pseudoClasses, () => {
+        this.#links = new extras.LinkedSheets(pseudoClasses, () => {
             // The states shown may need the rules it brought.
             this.#interaction.invalidate()
             if (!this.#playing) {
@@ -309,9 +314,10 @@ class ReplayPlayer extends EventTarget implements Player {
             assets: this.#assets,
             canvases: this.#canvases,
             pseudoClasses,
-            links: this.#links
+            links: this.#links,
+            resources: this.#resources
         })
-        this.#interaction = new interactions.Interaction(timeline, this.#materializer, this.#document, pseudoClasses)
+        this.#interaction = new extras.Interaction(timeline, this.#materializer, this.#document, pseudoClasses)
         this.#onError = onError
         this.#start = timeline.start
         this.#end = Math.max(timeline.end, this.#start)
@@ -426,7 +432,9 @@ class ReplayPlayer extends EventTarget implements Player {
         this.#firstViewport ??= timeline.firstViewport()
         this.#loadMedia()
         if (part.statics.length > 0) {
-            this.#assets.add(readEvents(part.statics))
+            const events = readEvents(part.statics)
+            this.#assets.add(events)
+            this.#resources.add(events)
             // What the document shows may use them: it is built again.
             this.#valid = false
             if (!this.#playing) {
@@ -488,6 +496,7 @@ class ReplayPlayer extends EventTarget implements Player {
         cancelAnimationFrame(this.#retry)
         this.#stage.destroy()
         this.#assets.revoke()
+        this.#resources.revoke()
         this.#canvases.revoke()
         this.#links.revoke()
         this.#snapshots.clear()

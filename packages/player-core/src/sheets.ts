@@ -60,21 +60,22 @@ export function changeRuleTexts(rules: string[], changes: readonly SheetChange[]
  * own window, so each document that adopts one gets a sheet of its own, with the same rules.
  */
 export class ConstructedSheets {
-    readonly #rewrite: (text: string) => string
+    readonly #rewrite: (text: string, document: Document) => string
     readonly #rules = new Map<number, string[]>()
     readonly #sheets = new Map<Document, Map<number, CSSStyleSheet>>()
 
-    constructor(rewrite: (text: string) => string) {
+    /** `rewrite` passes the rules of the sheets of each document. */
+    constructor(rewrite: (text: string, document: Document) => string) {
         this.#rewrite = rewrite
     }
 
     /** Applies the changes of a StyleSheet event; the first event of a number makes the sheet. */
     change(number: number, changes: readonly SheetChange[]): void {
         this.#rules.set(number, changeRuleTexts(this.#rules.get(number) ?? [], changes))
-        for (const sheets of this.#sheets.values()) {
+        for (const [document, sheets] of this.#sheets) {
             const sheet = sheets.get(number)
             if (sheet !== undefined) {
-                changeRules(sheet, changes, this.#rewrite)
+                changeRules(sheet, changes, text => this.#rewrite(text, document))
             }
         }
     }
@@ -93,7 +94,7 @@ export class ConstructedSheets {
             const rules = this.#rules.get(number)
             if (sheet === undefined && rules !== undefined && view !== null) {
                 sheet = new view.CSSStyleSheet()
-                changeRules(sheet, [{ kind: SheetChangeKind.Replace, rules }], this.#rewrite)
+                changeRules(sheet, [{ kind: SheetChangeKind.Replace, rules }], text => this.#rewrite(text, document))
                 sheets.set(number, sheet)
             }
             if (sheet !== undefined) {

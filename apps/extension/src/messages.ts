@@ -11,6 +11,8 @@ export interface Settings {
     inputs: boolean
     /** Records the text of pages as asterisks. */
     maskText: boolean
+    /** Downloads the images, style sheets, fonts and media pages load into the recording. */
+    resources: boolean
 }
 
 /** What the recorder in a page starts with: the page is a segment of the tab's session. */
@@ -27,6 +29,7 @@ export type ToRecorder = { type: 'start'; config: StartConfig } | { type: 'stop'
 /** From the recorder in the page's world to the bridge. */
 export type FromRecorder =
     | { type: 'data'; bytes: Uint8Array }
+    | { type: 'resources'; urls: string[] }
     | { type: 'stopped' }
     | { type: 'error'; message: string }
 
@@ -40,6 +43,7 @@ export type ToBackground =
     | { type: 'resume'; session: string; segment: number }
     | { type: 'page'; url: string; title: string }
     | { type: 'data'; seq: number; base64: string }
+    | { type: 'resources'; urls: string[] }
     | { type: 'stopped' }
     | { type: 'error'; message: string }
 

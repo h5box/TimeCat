@@ -14,6 +14,8 @@ let recorder: MessagePort | undefined
 /** What the recorder started with, until it stops. */
 let recording: StartConfig | undefined
 let seq = 0
+/** The resources the page loaded while recording, which go again to a background that started again. */
+let resources: string[] = []
 
 function send(message: ToBackground): void {
     const port = background
@@ -52,6 +54,9 @@ function connect(first: ToBackground): boolean {
             connect({ type: 'resume', session: recording.sessionId, segment: recording.segment })
         if (!resumed) {
             stopRecording()
+        } else if (resources.length > 0) {
+            // Those it was downloading are lost; it leaves out those it has.
+            send({ type: 'resources', urls: resources })
         }
     })
     port.postMessage(first)
@@ -70,6 +75,7 @@ function receive(port: chrome.runtime.Port, message: ToBridge): void {
             recorder = channel.port1
             recording = message.config
             seq = 0
+            resources = []
             channel.port1.addEventListener('message', (event: MessageEvent<FromRecorder>) => {
                 if (recorder === channel.port1) {
                     forward(event.data)
@@ -95,6 +101,10 @@ function forward(message: FromRecorder): void {
     switch (message.type) {
         case 'data':
             send({ type: 'data', seq: seq++, base64: toBase64(message.bytes) })
+            break
+        case 'resources':
+            resources.push(...message.urls)
+            send({ type: 'resources', urls: message.urls })
             break
         case 'stopped':
             recording = undefined

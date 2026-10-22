@@ -15,6 +15,8 @@ import { Canvases } from '../src/canvases.ts'
 import { isDocument, isFrame, isHtml, isInput, isSelect, isShadowRoot, isStyle, isTextArea } from '../src/dom.ts'
 import { Materializer, PLAYER_ATTRIBUTE } from '../src/materializer.ts'
 import type { MaterializerOptions } from '../src/materializer.ts'
+import { PseudoClasses } from '../src/pseudo-classes.ts'
+import { Resources } from '../src/resources.ts'
 import { Stage } from '../src/stage.ts'
 import { VirtualDocument } from '../src/timeline/virtual.ts'
 import type { EncodedState } from '../src/timeline/virtual.ts'
@@ -165,6 +167,21 @@ function isCanvasNode(node: Node): node is HTMLCanvasElement {
 
 function isImage(node: Node): node is HTMLImageElement {
     return isElement(node) && isHtml(node, 'img')
+}
+
+function isLinkNode(node: Node): node is HTMLLinkElement {
+    return isElement(node) && isHtml(node, 'link')
+}
+
+function encode(text: string): Uint8Array {
+    return new TextEncoder().encode(text)
+}
+
+async function until(condition: () => boolean): Promise<void> {
+    for (let tries = 0; tries < 100 && !condition(); tries++) {
+        // oxlint-disable-next-line no-await-in-loop -- waits for the browser
+        await new Promise(resolve => setTimeout(resolve, 10))
+    }
 }
 
 function colorOf(element: Element): string {
@@ -897,6 +914,79 @@ describe('Materializer', () => {
         expect(document.fonts.size).toBe(size)
         assets.revoke()
         await expect(fetch(local).catch((error: unknown) => error)).resolves.toBeInstanceOf(TypeError)
+    })
+
+    it('serves the resources the recording keeps for the URLs the page loaded, relative to its base', async () => {
+        const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"></svg>'
+        const pseudoClasses = new PseudoClasses()
+        const resources = new Resources(pseudoClasses)
+        resources.add([
+            {
+                type: EventType.Asset,
+                url: 'https://example.com/shop/a.svg',
+                mimeType: 'image/svg+xml',
+                data: encode(svg)
+            },
+            {
+                type: EventType.Asset,
+                url: 'https://example.com/css/site.css',
+                mimeType: 'text/css',
+                data: encode('p:hover { color: rgb(255, 0, 0); background: url(../shop/a.svg) }')
+            }
+        ])
+        const { materializer } = await setUp({ resources, pseudoClasses })
+        // head 4: link 5, style 6 (text 7); body 8: img 9, a 10, p 11
+        materializer.build(
+            pageOf(
+                [
+                    { tag: 'img', attributes: ['src', 'a.svg'] },
+                    { tag: 'a', attributes: ['href', 'a.svg'] },
+                    { tag: 'p', attributes: ['style', 'background: url(a.svg)', 'data-timecat-hover', ''] }
+                ],
+                {
+                    url: 'https://example.com/shop/',
+                    head: [
+                        {
+                            tag: 'link',
+                            attributes: ['rel', 'stylesheet', 'href', '/css/site.css', 'integrity', 'sha256-x']
+                        },
+                        { tag: 'style', children: [{ text: 'body { background: url(a.svg) }' }] }
+                    ]
+                }
+            )
+        )
+        const image = nodeOf(materializer, 9, isImage)
+        const local = image.getAttribute('src')!
+        expect(local).toMatch(new RegExp(`^blob:${location.origin}/`))
+        await image.decode()
+        expect(image.naturalWidth).toBe(20)
+        expect(nodeOf(materializer, 10, isElement).getAttribute('href')).toBe('a.svg')
+        expect(nodeOf(materializer, 11, isElement).getAttribute('style')).toBe(`background: url("${local}")`)
+        expect(nodeOf(materializer, 6, isStyleNode).textContent).toBe(`body { background: url("${local}") }`)
+        // The sheet, with its URLs replaced and its states rewritten, without the hash it no longer matches.
+        const link = nodeOf(materializer, 5, isLinkNode)
+        expect(link.getAttribute('href')).toMatch(/^blob:/)
+        expect(link.hasAttribute('integrity')).toBe(false)
+        await until(() => link.sheet !== null)
+        expect(rulesOf(link.sheet)).toEqual([
+            `p[data-timecat-hover] { color: rgb(255, 0, 0); background: url("${local}"); }`
+        ])
+        expect(colorOf(nodeOf(materializer, 11, isElement))).toBe('rgb(255, 0, 0)')
+        // URLs that come later, relative to a base that came later too.
+        materializer.apply(
+            mutations({
+                adds: [
+                    {
+                        parentId: 4,
+                        beforeId: 0,
+                        nodes: [build({ tag: 'base', attributes: ['href', 'x/'] }, { next: 12 })]
+                    }
+                ],
+                attributes: [{ id: 9, name: 'src', value: '../a.svg#b' }]
+            })
+        )
+        expect(image.getAttribute('src')).toBe(`${local}#b`)
+        resources.revoke()
     })
 
     it('shows canvases at the size of their bitmap, and what is drawn in them, in a document without scripts', async () => {

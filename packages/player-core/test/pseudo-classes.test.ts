@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absoluteUrls, PseudoClasses } from '../src/pseudo-classes.ts'
+import { PseudoClasses } from '../src/pseudo-classes.ts'
 
 describe('PseudoClasses', () => {
     it('rewrites the states in selectors to attributes, and notes those used', () => {
@@ -46,23 +46,5 @@ describe('PseudoClasses', () => {
         )
         expect(pseudoClasses.rewrite('a\\:hover:focus { x: y }')).toBe('a\\:hover[data-timecat-focus] { x: y }')
         expect(pseudoClasses.rewrite('/* [ */ a:hover { x: y }')).toBe('/* [ */ a[data-timecat-hover] { x: y }')
-    })
-})
-
-describe('absoluteUrls', () => {
-    const base = 'https://example.com/css/site.css'
-
-    it('resolves the relative URLs of a sheet against where it loaded from', () => {
-        expect(
-            absoluteUrls('@import "reset.css";\na { background: url(../img/a.png) } b { mask: url( "b.svg#m" ) }', base)
-        ).toBe(
-            '@import "https://example.com/css/reset.css";\na { background: url("https://example.com/img/a.png") } ' +
-                'b { mask: url("https://example.com/css/b.svg#m") }'
-        )
-    })
-
-    it('keeps absolute URLs, fragments and empty ones', () => {
-        const text = 'a { b: url(data:image/png;base64,AA==) url(#f) url() url("https://cdn.example/x.png") }'
-        expect(absoluteUrls(text, base)).toBe(text)
     })
 })

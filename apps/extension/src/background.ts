@@ -5,6 +5,7 @@
  * goes to IndexedDB as it comes.
  */
 import { fromBase64 } from './base64.ts'
+import { Downloads } from './downloads.ts'
 import { PORT_NAME } from './messages.ts'
 import type { Changed, Request, Settings, StartResult, Status, ToBackground, ToBridge } from './messages.ts'
 import { loadSettings } from './settings.ts'
@@ -15,6 +16,8 @@ import { isRecordable } from './ui.ts'
 const LATENCY = 1000
 /** How long a page may take to hand over the end of its recording once asked to stop. */
 const STOP_TIMEOUT = 5000
+/** How long the resources of a recording may take to download once it stopped; those left are left out. */
+const DOWNLOAD_TIMEOUT = 10_000
 const BRIDGE_ID = 'timecat-bridge'
 const RECORDING_COLOR = '#d93025'
 
@@ -32,6 +35,7 @@ interface Connection {
     port: chrome.runtime.Port
     session: string
     segment: number
+    settings: Settings
     /** Settles once what came so far is stored. */
     writes: Promise<void>
     /** Settles once the page stopped recording, or went away. */
@@ -40,6 +44,9 @@ interface Connection {
 }
 
 const connections = new Map<number, Connection>()
+/** What pages sent while the background attached them, which it takes once it did. */
+const attaching = new Map<chrome.runtime.Port, ToBackground[]>()
+const downloads = new Downloads()
 
 /** Changes to the recorded tabs happen one after the other. */
 let queue: Promise<unknown> = Promise.resolve()
@@ -156,6 +163,7 @@ async function stop(tabId: number): Promise<string | undefined> {
         await connection.writes
         disconnect(tabId, connection)
     }
+    await downloads.finish(state.session, DOWNLOAD_TIMEOUT)
     await store.endSession(state.session, Date.now())
     await showRecording(tabId, false)
     notify()
@@ -238,14 +246,23 @@ async function resume(port: chrome.runtime.Port, session: string, segment: numbe
  */
 function attach(tabId: number, port: chrome.runtime.Port, session: string, segment: number): Promise<boolean> {
     return serial(async () => {
-        if ((await recordedTabs())[tabId]?.session !== session) {
+        const state = (await recordedTabs())[tabId]
+        if (state?.session !== session) {
             return false
         }
         let end = noop
         const ended = new Promise<void>(resolve => {
             end = resolve
         })
-        const connection: Connection = { port, session, segment, writes: Promise.resolve(), ended, end }
+        const connection: Connection = {
+            port,
+            session,
+            segment,
+            settings: state.settings,
+            writes: Promise.resolve(),
+            ended,
+            end
+        }
         const previous = connections.get(tabId)
         if (previous !== undefined) {
             disconnect(tabId, previous)
@@ -257,12 +274,26 @@ function attach(tabId: number, port: chrome.runtime.Port, session: string, segme
 }
 
 function receive(port: chrome.runtime.Port, message: ToBackground): void {
-    if (message.type === 'hello') {
-        hello(port, message.url, message.title).catch(error => console.error('[timecat]', error))
+    if (message.type === 'hello' || message.type === 'resume') {
+        attaching.set(port, [])
+        const attached =
+            message.type === 'hello'
+                ? hello(port, message.url, message.title)
+                : resume(port, message.session, message.segment)
+        attached
+            .catch(error => console.error('[timecat]', error))
+            .finally(() => {
+                const queued = attaching.get(port) ?? []
+                attaching.delete(port)
+                for (const later of queued) {
+                    receive(port, later)
+                }
+            })
         return
     }
-    if (message.type === 'resume') {
-        resume(port, message.session, message.segment).catch(error => console.error('[timecat]', error))
+    const queued = attaching.get(port)
+    if (queued !== undefined) {
+        queued.push(message)
         return
     }
     const tabId = port.sender?.tab?.id
@@ -282,6 +313,11 @@ function receive(port: chrome.runtime.Port, message: ToBackground): void {
             connection.writes = connection.writes
                 .then(() => store.updatePage(connection.session, connection.segment, message.url, message.title))
                 .catch(error => console.error('[timecat]', error))
+            break
+        case 'resources':
+            if (connection.settings.resources && isStrings(message.urls)) {
+                downloads.add(connection.session, connection.segment, port.sender?.url, message.urls)
+            }
             break
         case 'stopped':
             connection.end()
@@ -397,6 +433,10 @@ serial(async () => {
     await saveTabs(tabs)
     await store.endInterrupted(new Set(Object.values(tabs).map(state => state.session)))
 }).catch(error => console.error('[timecat]', error))
+
+function isStrings(value: unknown): value is string[] {
+    return Array.isArray(value) && value.every(item => typeof item === 'string')
+}
 
 function noop(): void {
     // Replaced once the promise it settles exists.

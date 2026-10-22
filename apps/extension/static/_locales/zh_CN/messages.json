@@ -14,6 +14,7 @@
     "cannotRecord": { "message": "这个页面不能录制：只能录网页和本地文件。" },
     "startFailed": { "message": "无法开始录制：$ERROR$", "placeholders": { "error": { "content": "$1" } } },
     "recordWhat": { "message": "除了页面，还录制" },
+    "optResources": { "message": "图片、样式、字体和音视频，离线也能回放（最多 100 MB）" },
     "optConsole": { "message": "控制台输出和报错" },
     "optNetwork": { "message": "网络请求" },
     "optPerf": { "message": "性能（Web Vitals、长帧）" },

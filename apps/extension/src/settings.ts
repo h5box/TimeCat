@@ -7,10 +7,20 @@ const DEFAULTS: Settings = {
     canvas: false,
     video: false,
     inputs: false,
-    maskText: false
+    maskText: false,
+    resources: true
 }
 
-const KEYS: readonly (keyof Settings)[] = ['console', 'network', 'perf', 'canvas', 'video', 'inputs', 'maskText']
+const KEYS: readonly (keyof Settings)[] = [
+    'console',
+    'network',
+    'perf',
+    'canvas',
+    'video',
+    'inputs',
+    'maskText',
+    'resources'
+]
 
 export async function loadSettings(): Promise<Settings> {
     const items = await chrome.storage.local.get('settings')

@@ -182,23 +182,3 @@ function skipUrl(text: string, i: number): number {
     }
     return text.length
 }
-
-/** `text`, a style sheet loaded from `base`, with its relative URLs made absolute, so it can load from elsewhere. */
-export function absoluteUrls(text: string, base: string): string {
-    return text.replaceAll(
-        /\burl\(\s*(['"]?)((?:\\.|[^\\])*?)\1\s*\)|@import\s+(['"])((?:\\.|[^\\])*?)\3/gi,
-        (match, _quote: string, url: string | undefined, _importQuote: string, imported: string | undefined) => {
-            const value = url ?? imported ?? ''
-            // A fragment alone refers to the document the sheet applies to, wherever it came from.
-            if (value === '' || value.startsWith('#') || /^[a-z][\w+.-]*:/i.test(value)) {
-                return match
-            }
-            const href = URL.parse(value, base)?.href
-            if (href === undefined) {
-                return match
-            }
-            // URLs serialize `"` and `\` escaped.
-            return url === undefined ? `@import "${href}"` : `url("${href}")`
-        }
-    )
-}

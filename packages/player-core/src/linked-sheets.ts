@@ -1,5 +1,5 @@
+import { cssUrls } from './css-urls.ts'
 import { isLink } from './dom.ts'
-import { absoluteUrls } from './pseudo-classes.ts'
 import type { PseudoClasses } from './pseudo-classes.ts'
 
 /** The `Accept` header of requests for style sheets, which CORS lets through without asking first. */
@@ -102,7 +102,7 @@ export class LinkedSheets implements EventListenerObject {
             // As a browser asks for a style sheet, which some servers answer with something else otherwise.
             const response = await fetch(url, { credentials: 'omit', headers: { Accept: SHEET_ACCEPT } })
             if (response.ok && isCss(response.headers.get('content-type'))) {
-                const text = absoluteUrls(await response.text(), response.url || url)
+                const text = cssUrls(await response.text(), response.url || url)
                 const sheet = this.#pseudoClasses.rewrite(text)
                 if (sheet !== text && !this.#revoked) {
                     rewritten = URL.createObjectURL(new Blob([sheet], { type: 'text/css' }))

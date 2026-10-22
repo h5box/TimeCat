@@ -17,6 +17,7 @@
         "placeholders": { "error": { "content": "$1" } }
     },
     "recordWhat": { "message": "Record, besides the page" },
+    "optResources": { "message": "Images, styles, fonts and media, to replay offline (up to 100 MB)" },
     "optConsole": { "message": "Console messages and errors" },
     "optNetwork": { "message": "Network requests" },
     "optPerf": { "message": "Performance (Web Vitals, long frames)" },

@@ -26,13 +26,20 @@ After a rebuild, press the reload button on the extension's card. Chrome 120 or 
   on as the tab goes to other pages, reloads or goes back; each page is recorded on its own and played one after the
   other.
 - **Stop:** the same button or keys. The recording opens in a new tab. Closing the tab stops its recording too.
-- **What is recorded:** the popup sets it for the recordings to come. Console messages and errors, requests and
-  performance (Web Vitals, long animation frames) are on; canvases and the pictures of videos, which take much more
-  room, are off. What is typed into fields is masked, its length kept, unless **What is typed into fields** is on;
+- **What is recorded:** the popup sets it for the recordings to come. The images, style sheets, fonts and media the
+  pages load, console messages and errors, requests and performance (Web Vitals, long animation frames) are on;
+  canvases and the pictures of videos, which take much more room, are off. What is typed into fields is masked, its length kept, unless **What is typed into fields** is on;
   passwords always are. **Mask all text of pages** records the page's text as asterisks, keeping its spaces.
 - **Recordings:** **All recordings** in the popup lists them, newest first. Each one can be played, exported as one HTML
   file that plays anywhere with nothing to install, downloaded as a `.tcr` file for
   [`@timecat-js/player`](../../packages/player), or deleted.
+
+- **Offline:** the images, style sheets, fonts, audio and video the pages load are downloaded while recording, into
+  the recording, so it plays as the pages looked then, without the network, from the extension or as an exported
+  HTML file. Downloads go after the page's own requests, with the cookies of the page's site for its own resources,
+  as the page sent them; a resource of another site is downloaded without cookies. Each file is kept up to 10 MB, or
+  20 MB for audio and video, and a recording up to 100 MB in all; what is left out loads from the network when the
+  recording plays. Stopping waits up to 10 seconds for downloads still going on.
 
 ## How it works
 
@@ -40,12 +47,14 @@ After a rebuild, press the reload button on the extension's card. Chrome 120 or 
 | --- | --- | --- |
 | `background.ts` | Service worker | Keeps which tabs record in `chrome.storage.session`; injects the recorder into each page the tab shows; stores what it records in IndexedDB |
 | `bridge.ts` | Content script, isolated world | Connects the page to the service worker: says which page it is, starts and stops the recorder, passes on what it records |
-| `main.ts` | Content script, the page's world | [`@timecat-js/recorder`](../../packages/recorder) and its plugins, which wrap the page's `console`, `fetch` and DOM methods, so they run where the page does |
+| `main.ts` | Content script, the page's world | [`@timecat-js/recorder`](../../packages/recorder) and its plugins, which wrap the page's `console`, `fetch` and DOM methods, so they run where the page does; `resources.ts` finds the URLs of the resources the page and its same-origin frames load, from resource timing |
+| `downloads.ts` | Service worker | Downloads those resources into the recording, as Asset events on its `Assets` track |
 | `popup.ts` | Toolbar popup | Starts and stops the tab's recording; what to record |
 | `recordings.ts`, `player.ts` | Pages of the extension | The list of recordings, and [`<timecat-player>`](../../packages/player) with export, download and delete |
 
 Each page the tab shows is a segment of the recording: the recorder streams it with `onData` once a second, and the
-segments, one after the other, are the recording, as the player and the `.tcr` file take it. Chrome stops the service
+segments, one after the other, are the recording, as the player and the `.tcr` file take it. The resources downloaded
+for a page are chunks of its segment too, after what the recorder gave; each resource is kept once per recording. Chrome stops the service
 worker when it has nothing to do; the bridge then reconnects and the page goes on recording as the same segment.
 
 The bridge is registered for every page while a tab records, at `document_start`, so a page the tab goes to is
@@ -57,7 +66,12 @@ recorded from its start, and pages of other tabs check in and are told they don'
   missing.
 - Frames from other origins are not recorded (frames from the page's own origin are).
 - There is no narration: the extension has no microphone permission.
-- The page shares its world with the recorder, so it could see or change what is recorded. Record pages you trust.
+- The page shares its world with the recorder, so it could see or change what is recorded, and have resources
+  downloaded that it did not load. Record pages you trust.
+- Resources are found from resource timing, so those that loaded before recording started are missing once a page
+  loaded more than its buffer holds (250 by default). What scripts fetch, scripts themselves and documents are not
+  downloaded, nor what streams through Media Source Extensions. A server may answer the extension's request
+  differently from the page's, such as by its `Referer`, which the extension does not send.
 - Chrome's own pages (`chrome://`), the Web Store and other extensions' pages cannot be recorded.
 
 ## Development

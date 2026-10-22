@@ -93,6 +93,8 @@ Segment := Header Chunk*
 - 每个 chunk 压缩后不超过 64 KiB，因为页面卸载时 `fetch(keepalive)` 的发送上限就是 64 KiB。
 - 压缩一律用 gzip，因为浏览器原生的 CompressionStream 只有 gzip 系在三大引擎都可用。
 
+录制端以外的写入方（例如浏览器扩展，在后台下载页面加载的资源）可以在段的末尾追加 `Assets` 轨道的 chunk。它们的 `sequence` 从 2^30 开始依次递增，排在录制端的 chunk 之后，不算缺失；`startTime` 和 `duration` 都为 0，不影响段的结束时间。
+
 ### 4.3 时间线
 
 读取方把一次会话的各段拼成一条时间线，按以下规则排列事件：
@@ -167,7 +169,7 @@ Segment := Header Chunk*
 | 9 | StyleSheet | `Dom` | 通过 CSSOM 改变的样式规则 |
 | 10 | AdoptedStyleSheets | `Dom` | 文档或 shadow root 采用的样式表 |
 | 11 | FontFace | `Assets` | 脚本添加的字体 |
-| 12 | Asset | `Assets` | 回放时无法再从原 URL 加载的资源，如 `blob:` URL 的内容 |
+| 12 | Asset | `Assets` | 回放时无法或不应再从原 URL 加载的资源，如 `blob:` URL 的内容、下载下来的图片和样式表 |
 | 13 | Console | `Console` | 控制台消息、未捕获的错误和未处理的 Promise 拒绝 |
 | 14 | Network | `Network` | 结束的网络请求 |
 | 15 | Perf | `Perf` | 性能指标 |
@@ -330,6 +332,14 @@ Segment := Header Chunk*
 ### 6.16 Asset（12）
 
 字符串 URL、字符串 MIME 类型、`bytes` 内容。录制端把回放时无法再加载的资源（`blob:` URL 只在页面存活期间有效）抓取下来；回放端把引用这个 URL 的地方换成自己生成的 URL。同样与时间无关。
+
+URL 也可以是 `http:` 或 `https:` 的绝对 URL，不带片段（`#` 及之后的部分）：页面加载过的图片、样式表、字体、音视频，录下来以后回放不必联网，也不受资源后来变化的影响。MIME 类型取响应的 `Content-Type`，可以带 `charset` 等参数。两类 URL 的匹配方式不同：
+
+- `blob:` URL 按原文匹配，出现在属性值、样式文本或规则里的同一个字符串都会被替换。
+- `http:`、`https:` URL 按解析后的结果匹配：回放端先把属性或样式里的 URL（可以是相对 URL）按所在文档的基准 URL 解析成绝对 URL，去掉片段后查找，找到就换成自己生成的 URL，再接上原来的片段。会加载资源的地方才替换：`src`、`srcset`、`poster`、`background` 属性，`<link>` 和 SVG 元素（链接 `<a>` 除外）的 `href`，内联样式、样式表文本和规则里的 `url()` 与 `@import`。`srcset` 里有候选被录下时，只保留录下的候选。
+- MIME 类型为 `text/css` 的资源是样式表，其中的相对 URL 相对于样式表自己的 URL 解析，同样替换成录下的资源。
+
+同一个 URL 在一次会话里只取第一个 Asset 事件。
 
 ### 6.17 Console（13）
 

@@ -4,6 +4,7 @@ import type { FontFaceEvent, TcrEvent } from '@timecat-js/protocol'
 /**
  * What a recording keeps of content that the replay cannot load where the page did: `blob:` URLs, whose content
  * the replay serves from URLs of its own, and the font faces scripts added, which every replayed document gets.
+ * Recorded `http:` and `https:` URLs are left to `Resources`, which resolves the relative URLs that point to them.
  */
 export class Assets {
     /** Recorded URL to the replay's. */
@@ -21,7 +22,7 @@ export class Assets {
         let added = false
         for (const event of events) {
             if (event.type === EventType.Asset) {
-                if (!this.#urls.has(event.url)) {
+                if (!this.#urls.has(event.url) && !/^https?:/i.test(event.url)) {
                     const blob = new Blob([event.data.slice()], { type: event.mimeType })
                     this.#urls.set(event.url, URL.createObjectURL(blob))
                     added = true
@@ -46,8 +47,8 @@ export class Assets {
         return text.replace(pattern, url => this.#urls.get(url) ?? url)
     }
 
-    /** Adds the recorded font faces to a document, unless it has them. */
-    addFonts(document: Document): void {
+    /** Adds the recorded font faces to a document, unless it has them, with the URLs of their sources `rewrite`n. */
+    addFonts(document: Document, rewrite: (text: string) => string): void {
         const view = document.defaultView
         if (this.#fonts.length === 0 || view === null) {
             return
@@ -58,7 +59,7 @@ export class Assets {
             this.#faces.set(document, made)
         }
         for (const font of this.#fonts.slice(made.fonts)) {
-            const face = this.#face(view, font)
+            const face = this.#face(view, font, rewrite)
             if (face !== undefined) {
                 made.faces.push(face)
             }
@@ -79,7 +80,11 @@ export class Assets {
     }
 
     /** A face made in `view`, the window of the document it is for. */
-    #face(view: Window & typeof globalThis, font: FontFaceEvent): FontFace | undefined {
+    #face(
+        view: Window & typeof globalThis,
+        font: FontFaceEvent,
+        rewrite: (text: string) => string
+    ): FontFace | undefined {
         const { source, descriptors } = font
         const options: Record<string, string> = {}
         for (let i = 0; i < descriptors.length; i += 2) {
@@ -88,7 +93,7 @@ export class Assets {
         try {
             const face = new view.FontFace(
                 font.family,
-                typeof source === 'string' ? this.rewrite(source) : source.slice(),
+                typeof source === 'string' ? rewrite(source) : source.slice(),
                 options
             )
             // A face that fails to load just does not show; its rejection is not an error of the replay.

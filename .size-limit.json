@@ -34,7 +34,7 @@
         "path": "packages/player-core/dist/index.js",
         "import": "{ createPlayer }",
         "gzip": true,
-        "limit": "40.5 kB"
+        "limit": "41.5 kB"
     },
     {
         "name": "@timecat-js/plugin-console",
@@ -85,7 +85,7 @@
         "name": "@timecat-js/player/standalone (one script with all it needs)",
         "path": "packages/player/dist/timecat-player.js",
         "gzip": true,
-        "limit": "49 kB"
+        "limit": "50 kB"
     },
     {
         "name": "@timecat-js/player/export (the standalone script loaded on demand, included)",
@@ -93,6 +93,6 @@
         "import": "{ exportHtml }",
         "ignore": ["@timecat-js/protocol"],
         "gzip": true,
-        "limit": "50 kB"
+        "limit": "51 kB"
     }
 ]

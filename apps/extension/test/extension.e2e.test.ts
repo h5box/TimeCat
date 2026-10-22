@@ -31,8 +31,28 @@ const PAGES: Record<string, string> = {
     '/done': `<!doctype html>
 <title>Done</title>
 <p id="thanks">Thank you</p>
-<a id="home" href="/">Home</a>`
+<a id="home" href="/">Home</a>`,
+    '/styled': `<!doctype html>
+<title>Styled</title>
+<link rel="stylesheet" href="/css/site.css">
+<img id="logo" src="logo.svg#mark">
+<img id="private" src="/private.svg">`
 }
+
+function svg(width: number, height: number): string {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"></svg>`
+}
+
+/** What the styled page loads; `/private.svg` only with the cookie the page sets. */
+const RESOURCES: Record<string, { type: string; body: string }> = {
+    '/css/site.css': { type: 'text/css', body: 'body { background: url(../bg.svg) }' },
+    '/bg.svg': { type: 'image/svg+xml', body: svg(30, 30) },
+    '/logo.svg': { type: 'image/svg+xml', body: svg(40, 20) },
+    '/private.svg': { type: 'image/svg+xml', body: svg(10, 10) }
+}
+const COOKIE = 'visitor=ada'
+/** Whether the resources are gone, as they may be when a recording is played. */
+let gone = false
 
 let server: http.Server
 let origin: string
@@ -46,10 +66,16 @@ let extensionId: string
 beforeAll(async () => {
     server = http.createServer((request, response) => {
         const page = PAGES[request.url ?? '']
-        if (page === undefined) {
+        const resource = RESOURCES[request.url ?? '']
+        if (resource !== undefined) {
+            const allowed = request.url !== '/private.svg' || request.headers.cookie === COOKIE
+            response.writeHead(gone ? 404 : allowed ? 200 : 403, { 'content-type': resource.type }).end(resource.body)
+        } else if (page === undefined) {
             response.writeHead(500, { 'content-type': 'application/json' }).end('{"error":"declined"}')
         } else {
-            response.writeHead(200, { 'content-type': 'text/html' }).end(page)
+            response
+                .writeHead(200, { 'content-type': 'text/html', 'set-cookie': `${COOKIE}; SameSite=Strict; Path=/` })
+                .end(page)
         }
     })
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -382,6 +408,44 @@ describe('the extension', () => {
         expect(typed).toBe('Ada Lovelace')
         await popup.uncheck('#option-inputs')
         await popup.close()
+        await replay.close()
+        await tab.close()
+    })
+
+    it('keeps the resources pages load, downloaded with the cookies of their site, for the replay', async () => {
+        const tab = await context.newPage()
+        await tab.goto(`${origin}/styled`)
+        const tabId = await tabIdOf(`${origin}/styled`)
+        expect(await ask<StartResult>({ type: 'start', tabId })).toEqual({ ok: true })
+        await waitForPages(tabId, 1)
+        await delay(300)
+        // Something happens, or the recording would be over as soon as it started.
+        await tab.mouse.move(5, 5)
+        await delay(1500)
+        await tab.mouse.move(50, 50)
+        const replay = await stopRecording(tabId)
+        gone = true
+        const duration = await loaded(replay)
+        const shown = await replay.evaluate(async total => {
+            const element = document.querySelector<TimecatPlayer>('timecat-player')
+            await element?.seek(total)
+            const replayed = element?.player?.document
+            const images = [...(replayed?.querySelectorAll('img') ?? [])]
+            await Promise.all(images.map(image => image.decode().catch(() => undefined)))
+            return {
+                images: images.map(image => [
+                    image.getAttribute('src')?.replace(/^blob:.*#/u, 'blob:#'),
+                    image.naturalWidth
+                ]),
+                background: replayed === undefined ? '' : getComputedStyle(replayed.body).backgroundImage
+            }
+        }, duration)
+        expect(shown.images).toEqual([
+            ['blob:#mark', 40],
+            [expect.stringMatching(/^blob:/u), 10]
+        ])
+        expect(shown.background).toMatch(/^url\("blob:/u)
+        gone = false
         await replay.close()
         await tab.close()
     })

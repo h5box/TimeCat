@@ -127,12 +127,12 @@ them in. Instead, selectors with `:hover`, `:active`, `:focus`, `:focus-visible`
 select attributes, which the player sets on the elements in those states: the element recorded as focused, with
 the hosts and ancestors that share its focus, and what the replay finds under the recorded pointer and where it
 pressed. Recordings whose rules select neither pointer state cost no hit testing. Style sheets that `<link>`
-elements load are fetched once more, which the browser's cache mostly serves, and those that select a state are
-swapped for a rewritten copy once it has loaded, so nothing shows unstyled meanwhile; this needs CORS, unless the
-player runs in an extension that may read the sheet's site. A focused element that shows its focus gets an outline,
-as browsers draw one. The modal dialogs and popovers recorded in the top layer are put there again, in the recorded
-order, without taking the focus from the page the player is in. This code loads in a chunk of its own, while the
-recording is indexed.
+elements load, but those the recording keeps, are fetched once more, which the browser's cache mostly serves, and
+those that select a state are swapped for a rewritten copy once it has loaded, so nothing shows unstyled meanwhile;
+this needs CORS, unless the player runs in an extension that may read the sheet's site. A focused element that shows
+its focus gets an outline, as browsers draw one. The modal dialogs and popovers recorded in the top layer are put
+there again, in the recorded order, without taking the focus from the page the player is in. This code loads in a
+chunk of its own, while the recording is indexed, as does the code that serves the resources the recording keeps.
 
 **In extensions.** Chrome adds a style sheet to every document of an extension, the replay's too, which sets the font
 of `body`. When the replay's document has one, the player undoes it, so that the page's own rules decide the font, as
@@ -148,9 +148,14 @@ Replayed media elements without a track of their own follow their recorded playb
 and whether they play, from their source URL. Media follow the replay's time, speed, volume and muting.
 
 **URLs.** Relative URLs resolve against the recorded page's URL, or its first `<base>` element, through a `<base>`
-element the player keeps first in the head. Images, styles and fonts load from where the recorded page had them,
-except what lived only in the recorded page: the content of its `blob:` URLs comes from the recording, served from
-`blob:` URLs the player makes, and the font faces its scripts added are added to every replayed document.
+element the player keeps first in the head. Images, styles, fonts and media load from where the recorded page had
+them, except what the recording keeps: the content of `blob:` URLs, which lived only in the recorded page, and the
+`http:` and `https:` resources that a recorder such as the [TimeCat extension](../../apps/extension) downloaded.
+Those are served from `blob:` URLs the player makes, wherever the replay refers to them, relative URLs included: in
+`src`, `srcset`, `poster`, the `href` of `<link>` and SVG elements, inline styles, style sheets and their rules. A
+recorded style sheet is served with the URLs in it replaced in turn, and the states of interaction rewritten; a
+`srcset` keeps the candidates recorded, when there are any, so the replay shows what the page did. The font faces
+scripts added are added to every replayed document.
 
 ## Content security policy
 
@@ -175,11 +180,12 @@ The last two versions of Chrome, Edge, Firefox and Safari.
 - Canvas content shows only where `@timecat-js/plugin-canvas` recorded it (other canvases keep their size, empty),
   and the pixels of a `<video>` only where `@timecat-js/plugin-media` captured them; otherwise media elements play their own source again. Audio tracks
   encoded with WebCodecs are not played.
-- Resources load at replay time: whatever has changed or gone since, or does not allow cross-origin use (fonts
-  without CORS headers, for example), shows differently.
+- Resources the recording does not keep load at replay time: whatever has changed or gone since, or does not allow
+  cross-origin use (fonts without CORS headers, for example), shows differently.
 - Text selection is not shown. The states of interaction show as when no one interacts with the page in style
   sheets the player cannot fetch again (cross-origin ones without CORS headers, outside an extension that may read
-  them), in sheets that `@import` rules load, and after pseudo-elements, as in `::part(label):hover`. What is under
+  them), in sheets that `@import` rules load, unless the recording keeps them, and after pseudo-elements, as in
+  `::part(label):hover`. What is under
   the pointer is what is under it in the replay, which differs where the layout does.
 - A relative `<base href>` resolves against the page URL at the time shown; browsers keep resolving it against the
   URL the page had when the element was added.
