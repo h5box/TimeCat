@@ -122,6 +122,18 @@ canvas with no size. So each replayed `<canvas>` gets a picture as the `content`
 or an empty picture of its bitmap's size. The canvas then shows the picture, in the room the canvas took when it was
 recorded.
 
+**Interaction.** No one interacts with the replay, so its elements are in none of the states that interaction puts
+them in. Instead, selectors with `:hover`, `:active`, `:focus`, `:focus-visible` and `:focus-within` are rewritten to
+select attributes, which the player sets on the elements in those states: the element recorded as focused, with
+the hosts and ancestors that share its focus, and what the replay finds under the recorded pointer and where it
+pressed. Recordings whose rules select neither pointer state cost no hit testing. Style sheets that `<link>`
+elements load are fetched once more, which the browser's cache mostly serves, and those that select a state are
+swapped for a rewritten copy once it has loaded, so nothing shows unstyled meanwhile; this needs CORS, unless the
+player runs in an extension that may read the sheet's site. A focused element that shows its focus gets an outline,
+as browsers draw one. The modal dialogs and popovers recorded in the top layer are put there again, in the recorded
+order, without taking the focus from the page the player is in. This code loads in a chunk of its own, while the
+recording is indexed.
+
 **In extensions.** Chrome adds a style sheet to every document of an extension, the replay's too, which sets the font
 of `body`. When the replay's document has one, the player undoes it, so that the page's own rules decide the font, as
 when it was recorded.
@@ -148,7 +160,9 @@ on the main thread.
 
 The replay frame inherits the policy of the page it is in. For the recorded page to look right, that policy has to
 allow its styles, inline ones included (`style-src 'unsafe-inline'`, or `style-src-elem` and `style-src-attr`), and
-the images and fonts it loads, `blob:` ones included where the recording carries `blob:` content. The player's own
+the images and fonts it loads, `blob:` ones included where the recording carries `blob:` content. Linked style sheets
+are fetched again by the player, which needs `connect-src` to allow their URLs, and those rewritten for the states
+of interaction load from `blob:` URLs (`style-src blob:`); without either, they stay as they are. The player's own
 styles need nothing: they are constructed style sheets.
 
 ## Browser support
@@ -163,8 +177,10 @@ The last two versions of Chrome, Edge, Firefox and Safari.
   encoded with WebCodecs are not played.
 - Resources load at replay time: whatever has changed or gone since, or does not allow cross-origin use (fonts
   without CORS headers, for example), shows differently.
-- States the recording does not capture are not shown: `:hover` and focus styles, open dialogs and popovers in the
-  top layer, text selection.
+- Text selection is not shown. The states of interaction show as when no one interacts with the page in style
+  sheets the player cannot fetch again (cross-origin ones without CORS headers, outside an extension that may read
+  them), in sheets that `@import` rules load, and after pseudo-elements, as in `::part(label):hover`. What is under
+  the pointer is what is under it in the replay, which differs where the layout does.
 - A relative `<base href>` resolves against the page URL at the time shown; browsers keep resolving it against the
   URL the page had when the element was added.
 - Recorded attributes with names the DOM does not accept are left out, and elements with such names are replaced

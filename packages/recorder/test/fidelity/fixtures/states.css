@@ -1,0 +1,7 @@
+/* Served to the recorded page, and to the player, which loads it again to rewrite it. */
+#linked:hover {
+    color: rgb(255, 0, 0);
+}
+#linked::after {
+    content: ':hover {';
+}

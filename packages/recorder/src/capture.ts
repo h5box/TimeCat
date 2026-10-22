@@ -15,7 +15,9 @@ import {
     containerOf,
     documentUrl,
     HTML_NAMESPACE,
+    isDialog,
     isDocument,
+    isElement,
     isForm,
     isFrame,
     isInput,
@@ -27,6 +29,7 @@ import {
     isStyle,
     isTextArea
 } from './dom.ts'
+import { FocusRecorder } from './focus.ts'
 import { FontRecorder } from './fonts.ts'
 import { NodeIds } from './ids.ts'
 import { InputRecorder } from './inputs.ts'
@@ -38,6 +41,7 @@ import { RealmHooker } from './realm.ts'
 import type { RealmHooks } from './realm.ts'
 import { ScrollRecorder } from './scroll.ts'
 import { SheetRecorder } from './sheets.ts'
+import { TopLayerRecorder } from './top-layer.ts'
 import { TreeWriter } from './tree.ts'
 import type { InnerRoot, Scope } from './tree.ts'
 
@@ -73,6 +77,9 @@ const FRAME_EVENTS = [
     'pointerup',
     'pointercancel',
     'scroll',
+    'focusin',
+    'focusout',
+    'beforetoggle',
     'popstate',
     'hashchange',
     'DOMContentLoaded'
@@ -85,7 +92,7 @@ const WINDOW_EVENTS = [...FRAME_EVENTS, 'resize', 'pagehide', 'visibilitychange'
  * Events in a shadow tree that its window does not see: they do not leave the tree, or are seen there with the
  * host as their target, as `input` is.
  */
-const SHADOW_EVENTS = ['input', 'change', 'reset', 'scroll']
+const SHADOW_EVENTS = ['input', 'change', 'reset', 'scroll', 'beforetoggle']
 
 const ORIGIN = [0, 0] as const
 
@@ -113,6 +120,8 @@ export class Capture implements EventListenerObject, Scope {
     readonly #inputs: InputRecorder
     readonly #pointer: PointerRecorder
     readonly #scroll: ScrollRecorder
+    readonly #focus: FocusRecorder
+    readonly #topLayer: TopLayerRecorder
     readonly #sheets: SheetRecorder
     readonly #fonts: FontRecorder
     readonly #assets: AssetRecorder
@@ -162,6 +171,8 @@ export class Capture implements EventListenerObject, Scope {
         this.#inputs = new InputRecorder(this.#ids, this.#privacy, this)
         this.#pointer = new PointerRecorder(options.sink)
         this.#scroll = new ScrollRecorder(this.#ids, this)
+        this.#focus = new FocusRecorder(this.#ids, this)
+        this.#topLayer = new TopLayerRecorder(this.#ids, this)
         this.#sheets = new SheetRecorder(this.#ids, this)
         this.#assets = new AssetRecorder({ sink: options.sink, now: options.now, budget: options.assetBudget })
         this.#fonts = new FontRecorder(this.#assets)
@@ -222,11 +233,8 @@ export class Capture implements EventListenerObject, Scope {
 
     /** Calls `observer` with each document and shadow root recorded, those so far and those to come. */
     observeRoots(observer: (root: InnerRoot) => void): void {
-        for (const reference of this.#roots) {
-            const root = reference.deref()
-            if (root !== undefined) {
-                this.#notify(observer, root)
-            }
+        for (const root of this.#liveRoots()) {
+            this.#notify(observer, root)
         }
         this.#rootObservers.push(observer)
     }
@@ -373,6 +381,16 @@ export class Capture implements EventListenerObject, Scope {
                 this.#offsets.clear()
                 this.#viewportChanged = true
                 break
+            case 'focusin':
+            case 'focusout':
+                this.#focus.mark()
+                break
+            case 'beforetoggle':
+                // Popovers, and dialogs in browsers that send it to them too.
+                if (isNode(target) && isElement(target)) {
+                    this.#topLayer.mark(target)
+                }
+                break
             case 'DOMContentLoaded':
                 if (isNode(target) && isDocument(target)) {
                     this.#findDeclarativeRoots(target)
@@ -415,6 +433,16 @@ export class Capture implements EventListenerObject, Scope {
         roots.push(new WeakRef(root))
         for (const observer of this.#rootObservers) {
             this.#notify(observer, root)
+        }
+    }
+
+    /** The documents and shadow roots recorded that are still around. */
+    *#liveRoots(): Generator<InnerRoot> {
+        for (const reference of this.#roots) {
+            const root = reference.deref()
+            if (root !== undefined) {
+                yield root
+            }
         }
     }
 
@@ -475,6 +503,8 @@ export class Capture implements EventListenerObject, Scope {
             this.#styles.add(style)
         }
         this.#assets.request(tree.urls)
+        this.#topLayer.found(this.#liveRoots())
+        this.#focus.mark()
         this.#snapshotting = false
         this.#write(time, false)
     }
@@ -493,6 +523,10 @@ export class Capture implements EventListenerObject, Scope {
             if (!buffer.isEmpty) {
                 try {
                     this.#markControls(buffer)
+                    if (buffer.removed.size > 0 && this.#focus.focused) {
+                        // The focus leaves an element removed, without an event in every browser.
+                        this.#focus.mark()
+                    }
                     const mutations = this.#mutations
                     const body = mutations.write(buffer)
                     if (body !== undefined) {
@@ -511,9 +545,17 @@ export class Capture implements EventListenerObject, Scope {
                 }
             }
             this.#writeStyles(time)
+            const layer = this.#topLayer.write()
+            if (layer !== undefined) {
+                sink.event(Track.Dom, EventType.TopLayer, time, layer)
+            }
             const input = this.#inputs.write()
             if (input !== undefined) {
                 sink.event(Track.Input, EventType.Input, time, input)
+            }
+            const focus = this.#focus.write(this.#document)
+            if (focus !== undefined) {
+                sink.event(Track.Input, EventType.Focus, time, focus)
             }
             this.#pointer.flush(time, force)
             const scroll = this.#scroll.write()
@@ -701,7 +743,8 @@ export class Capture implements EventListenerObject, Scope {
      * changes a control, or after its form is reset, its value follows its default: the `value` attribute, the
      * `checked` attribute, the text of a `<textarea>`. The replay sets the state of controls it was recorded
      * for, after which it no longer follows the default, so the recording has to say when the state changes
-     * this way. It also notes `<style>` elements whose text changed, which makes them a new sheet.
+     * this way. It also notes `<style>` elements whose text changed, which makes them a new sheet, and dialogs
+     * opened or closed.
      */
     #markControls(buffer: MutationBuffer): void {
         const inputs = this.#inputs
@@ -714,6 +757,9 @@ export class Capture implements EventListenerObject, Scope {
             }
         }
         for (const [element, names] of buffer.attributes) {
+            if (names.has('open') && isDialog(element)) {
+                this.#topLayer.mark(element)
+            }
             if (
                 isSelect(element) ||
                 isOptGroup(element) ||

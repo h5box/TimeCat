@@ -1,5 +1,12 @@
 import { decodeEvent, EventType } from '@timecat-js/protocol'
-import type { MediaStateEvent, MediaTrackEvent, TcrEvent, ViewportEvent } from '@timecat-js/protocol'
+import type {
+    FocusEvent,
+    MediaStateEvent,
+    MediaTrackEvent,
+    TcrEvent,
+    TopLayerEvent,
+    ViewportEvent
+} from '@timecat-js/protocol'
 import { upperBound } from '../search.ts'
 import type { At, Keyframe, PointerTrail, TimelineIndex } from './types.ts'
 
@@ -37,6 +44,10 @@ export class Timeline {
     readonly mediaTracks: At<MediaTrackEvent>[] = []
     /** The playback state of media elements, in time order. */
     readonly mediaStates: At<MediaStateEvent>[] = []
+    /** The element focused, in time order. */
+    readonly focus: At<FocusEvent>[] = []
+    /** The dialogs and popovers in the top layer, in time order. */
+    readonly topLayer: At<TopLayerEvent>[] = []
     readonly #packets = new Map<number, TrackPackets>()
     /** Times of the recorded snapshots, after which the ids of the nodes before may stand for others. */
     readonly #snapshotTimes: number[] = []
@@ -101,6 +112,8 @@ export class Timeline {
         const { media } = part
         this.mediaTracks.push(...media.tracks)
         this.mediaStates.push(...media.states)
+        this.focus.push(...part.interaction.focus)
+        this.topLayer.push(...part.interaction.topLayer)
         const { packets } = media
         for (let i = 0; i < packets.count; i++) {
             const track = packets.tracks[i]!

@@ -113,7 +113,7 @@ export class Stage {
         const touch = state?.type === PointerType.Touch
         show(this.#cursor, state !== undefined && !touch, state)
         this.#cursor.style.transform = state === undefined ? '' : `translate(${state.x}px, ${state.y}px) ${scale}`
-        show(this.#touch, touch && state.pressed, state)
+        show(this.#touch, touch && state.press !== undefined, state)
         for (const [i, element] of this.#clicks.entries()) {
             const click = state?.clicks[i]
             show(element, click !== undefined, click)

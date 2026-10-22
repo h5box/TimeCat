@@ -119,6 +119,13 @@ Script changes to form controls, which fire no event, are caught by wrapping the
 and `selected` setters, in the page's realm and in each of its frames'. Pointer moves are batched into columns and
 written once a batch spans a second, by a timer: a moving pointer costs no task per move.
 
+**Focus and top layer.** Which element has the focus, and whether it shows that it has (`:focus-visible`), is
+looked at when `focusin` and `focusout` say it moved, and when the focused element may have been removed, and
+written when it changed: the innermost element, in shadow trees and same-origin frames too. The modal dialogs and
+popovers shown in the top layer are found once with the snapshot, then looked at when `beforetoggle` or a dialog's
+`open` attribute say they changed, and written in the order they were shown. Neither costs anything while nothing
+moves the focus or opens anything. Hover and active states are not recorded: replays find them from the pointer.
+
 **Shadow trees and frames.** Shadow roots and the documents of same-origin frames are written with their hosts and
 frames, and observed from then on. Shadow roots that script attaches are caught by wrapping `attachShadow`, which is
 also the only way to reach closed ones; declarative shadow roots that the parser attaches to hosts already written
@@ -176,7 +183,7 @@ Chrome and Edge 111, Firefox 115, Safari 16.4 and later.
   sets `adoptedStyleSheets` again.
 - Font faces made before recording started, or in a frame before its document was recorded, are not recorded.
 - `blob:` content beyond `assetBudget`, and media source URLs, are not recorded.
-- Hover and focus states, text selection and the top layer (open dialogs and popovers) are not recorded.
+- Text selection is not recorded.
 - Script content is not recorded: replays never run it.
 
 ## License

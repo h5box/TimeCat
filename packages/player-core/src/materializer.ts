@@ -26,6 +26,7 @@ import {
     isFrame,
     isHtml,
     isInput,
+    isLink,
     isScript,
     isSelect,
     isShadowRoot,
@@ -33,8 +34,11 @@ import {
     isText,
     isTextArea
 } from './dom.ts'
+import type { LinkedSheets } from './linked-sheets.ts'
+import type { PseudoClasses } from './pseudo-classes.ts'
 import { FOREIGN_ATTRIBUTES, INERT_SCRIPT_TYPE, sanitize } from './sanitize.ts'
 import { changeRules, ConstructedSheets } from './sheets.ts'
+import { stateAttribute } from './states.ts'
 
 /** Marks the elements the player adds to the replayed document. */
 export const PLAYER_ATTRIBUTE = 'data-timecat-player'
@@ -53,6 +57,15 @@ const POLICY = "script-src 'none'; object-src 'none'; frame-src 'none'; worker-s
  */
 const EXTENSION_FONT = 'body { font-family: revert-layer; font-size: revert-layer }'
 
+/**
+ * The ring browsers draw around an element the keyboard focused, which their own style sheets give `:focus-visible`,
+ * for the attribute that stands for it in the replay. In a layer before the page's, so that the page's rules win, as
+ * they do over the browser's.
+ */
+const FOCUS_RING =
+    `@layer timecat-player { [${stateAttribute('focus-visible')}] ` +
+    '{ outline: auto 1px; outline: auto 1px -webkit-focus-ring-color } }'
+
 /** Attributes whose change can change what a canvas shows. */
 const CANVAS_ATTRIBUTES = new Set(['style', 'width', 'height'])
 
@@ -61,6 +74,17 @@ const INVALID_TAG = 'timecat-invalid'
 
 /** How often a scroll position that does not stick, for example before the content it needs has loaded, is tried. */
 const SCROLL_TRIES = 60
+
+export interface MaterializerOptions {
+    /** What the recording keeps of `blob:` URLs and fonts. */
+    assets?: Assets
+    /** The pictures of what is drawn in canvases. */
+    canvases?: Canvases
+    /** Rewrites the selectors of the states the replay shows; without, they select what they would anyway. */
+    pseudoClasses?: PseudoClasses
+    /** Rewrites the style sheets the replay links to; without, they stay as they are. */
+    links?: LinkedSheets
+}
 
 interface PendingScroll {
     x: number
@@ -102,7 +126,9 @@ export class Materializer {
     readonly #document: Document
     readonly #assets: Assets
     readonly #canvases: Canvases
+    readonly #links: LinkedSheets | undefined
     #nodes = new Map<number, Node>()
+    #version = 0
     /**
      * While a snapshot is built, the nodes shown before it, which it takes back where it has the same ones: what
      * stays needs no new style, layout or paint, and images and frames do not load again.
@@ -128,16 +154,22 @@ export class Materializer {
     /** Whether the browser styles the font of `body` beyond its defaults; undefined until the document is written. */
     #extensionFont: boolean | undefined
 
-    /**
-     * `assets` holds what the recording keeps of `blob:` URLs and fonts; `canvases`, the pictures of what is drawn
-     * in canvases.
-     */
-    constructor(document: Document, assets: Assets = new Assets(), canvases: Canvases = new Canvases()) {
+    constructor(document: Document, options: MaterializerOptions = {}) {
+        const { assets = new Assets(), canvases = new Canvases(), pseudoClasses } = options
         this.#document = document
         this.#assets = assets
         this.#canvases = canvases
-        this.#rewrite = text => assets.rewrite(text)
+        this.#links = options.links
+        this.#rewrite =
+            pseudoClasses === undefined
+                ? text => assets.rewrite(text)
+                : text => pseudoClasses.rewrite(assets.rewrite(text))
         this.#sheets = new ConstructedSheets(this.#rewrite)
+    }
+
+    /** Changes with every change to what the document shows. */
+    get version(): number {
+        return this.#version
     }
 
     /** The node a recorded id stands for. */
@@ -156,6 +188,7 @@ export class Materializer {
      * can, with their attributes and data changed to the snapshot's, which costs far less than new ones.
      */
     build(snapshot: SnapshotEvent): void {
+        this.#version++
         const document = this.#document
         const root = snapshot.root
         const reuse = this.#quirks === root.quirks
@@ -176,11 +209,13 @@ export class Materializer {
 
     /** Shows nothing, as before the first snapshot. */
     clear(): void {
+        this.#version++
         this.#reset()
     }
 
     /** Applies an event other than a snapshot; viewport and pointer events are left to the stage. */
     apply(event: TcrEvent): void {
+        this.#version++
         switch (event.type) {
             case EventType.Mutations:
                 this.#mutate(event)
@@ -263,14 +298,12 @@ export class Materializer {
             document.replaceChildren()
             base = document.createElement('base')
             base.setAttribute(PLAYER_ATTRIBUTE, '')
-            if (this.#extensionFont === true) {
-                // In the base element, the one element of the player's that stays first in the document, before the
-                // page's style sheets. A style element works wherever it is in the document.
-                const style = document.createElement('style')
-                style.setAttribute(PLAYER_ATTRIBUTE, '')
-                style.textContent = EXTENSION_FONT
-                base.append(style)
-            }
+            // In the base element, the one element of the player's that stays first in the document, before the
+            // page's style sheets. A style element works wherever it is in the document.
+            const style = document.createElement('style')
+            style.setAttribute(PLAYER_ATTRIBUTE, '')
+            style.textContent = this.#extensionFont === true ? `${FOCUS_RING}\n${EXTENSION_FONT}` : FOCUS_RING
+            base.append(style)
             this.#bases.set(document, base)
         } else if (!base.isConnected) {
             document.documentElement?.prepend(base)
@@ -589,10 +622,17 @@ export class Materializer {
         const element = old ?? createElement(document, node)
         const attributes = node.attributes
         let set = 0
+        // A link's other attributes say whether the replay takes another style sheet for the one it links to.
+        let href = -1
         for (let i = 0; i < attributes.length; i += 2) {
-            if (this.#setAttribute(element, attributes[i]!, attributes[i + 1]!)) {
+            if (attributes[i] === 'href' && isLink(element)) {
+                href = i
+            } else if (this.#setAttribute(element, attributes[i]!, attributes[i + 1]!)) {
                 set++
             }
+        }
+        if (href !== -1 && this.#setAttribute(element, 'href', attributes[href + 1]!)) {
+            set++
         }
         if (old !== undefined) {
             if (old.attributes.length > set) {
@@ -627,7 +667,10 @@ export class Materializer {
             element.removeAttribute(name)
             return false
         }
-        const rewritten = this.#assets.rewrite(safe)
+        let rewritten = this.#assets.rewrite(safe)
+        if (name === 'href' && this.#links !== undefined && isLink(element)) {
+            rewritten = this.#links.href(element, rewritten)
+        }
         if (element.getAttribute(name) === rewritten) {
             return true
         }

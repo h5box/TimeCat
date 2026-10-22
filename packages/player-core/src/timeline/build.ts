@@ -16,7 +16,16 @@ import {
     Track,
     writeEventFrame
 } from '@timecat-js/protocol'
-import type { Chunk, FileHeader, IdCounter, MediaStateEvent, MediaTrackEvent, TcrEvent } from '@timecat-js/protocol'
+import type {
+    Chunk,
+    FileHeader,
+    FocusEvent,
+    IdCounter,
+    MediaStateEvent,
+    MediaTrackEvent,
+    TcrEvent,
+    TopLayerEvent
+} from '@timecat-js/protocol'
 import type { At, Keyframe, MediaIndex, PointerTrail, TimelineIndex } from './types.ts'
 import { VirtualDocument } from './virtual.ts'
 
@@ -261,6 +270,8 @@ class Indexer {
     #data: Frame[] = []
     #mediaTracks: At<MediaTrackEvent>[] = []
     #mediaStates: At<MediaStateEvent>[] = []
+    #focus: At<FocusEvent>[] = []
+    #topLayer: At<TopLayerEvent>[] = []
     #packets = new PacketColumns()
     /** Media tracks whose packets cannot be decoded until their next key packet, because one is missing. */
     readonly #brokenTracks = new Set<number>()
@@ -421,10 +432,13 @@ class Indexer {
             statics: this.#statics.finish(),
             data: data.finish(),
             media: { tracks: this.#mediaTracks, states: this.#mediaStates, packets: this.#packets.take() },
+            interaction: { focus: this.#focus, topLayer: this.#topLayer },
             warnings: this.#warnings
         }
         this.#mediaTracks = []
         this.#mediaStates = []
+        this.#focus = []
+        this.#topLayer = []
         this.#keyframes = []
         this.#compressions = []
         this.#pointer = new PointerColumns()
@@ -506,6 +520,15 @@ class Indexer {
         }
         if (event.type === EventType.MediaState) {
             this.#mediaStates.push({ time, event })
+            return
+        }
+        // States the player looks up by time, like the media's.
+        if (event.type === EventType.Focus) {
+            this.#focus.push({ time, event })
+            return
+        }
+        if (event.type === EventType.TopLayer) {
+            this.#topLayer.push({ time, event })
             return
         }
         if (event.type === EventType.Snapshot) {

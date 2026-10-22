@@ -1,4 +1,4 @@
-import type { MediaStateEvent, MediaTrackEvent } from '@timecat-js/protocol'
+import type { FocusEvent, MediaStateEvent, MediaTrackEvent, TopLayerEvent } from '@timecat-js/protocol'
 
 /**
  * What the indexer hands the player: events in replay order with their bodies still encoded, the keyframes to seek
@@ -33,6 +33,8 @@ export interface TimelineIndex {
     data: Uint8Array<ArrayBuffer>
     /** Media tracks, their packets and the playback state of media elements. */
     media: MediaIndex
+    /** What the recorded user focused, and the dialogs and popovers shown. */
+    interaction: InteractionIndex
     /** Problems the recording was read despite, such as a truncated last chunk. */
     warnings: string[]
 }
@@ -49,6 +51,14 @@ export interface MediaIndex {
     /** MediaState events, in replay order. */
     states: At<MediaStateEvent>[]
     packets: PacketTable
+}
+
+/** States the player reads at any time, which `events` leaves out. */
+interface InteractionIndex {
+    /** Focus events, in replay order. */
+    focus: At<FocusEvent>[]
+    /** TopLayer events, in replay order. */
+    topLayer: At<TopLayerEvent>[]
 }
 
 /** Packets of media tracks as their chunks came, those of each track in decode order. */

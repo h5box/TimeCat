@@ -10,6 +10,9 @@ import type {
 } from '@timecat-js/protocol'
 import { Assets } from './assets.ts'
 import { Canvases } from './canvases.ts'
+import type { Interaction } from './interaction.ts'
+import type * as Interactions from './interactions.ts'
+import type { LinkedSheets } from './linked-sheets.ts'
 import { Materializer } from './materializer.ts'
 import type { MediaPlayer } from './media/media.ts'
 import { pointerAt } from './pointer.ts'
@@ -140,12 +143,15 @@ export async function createPlayer(
     const speed = checkSpeed(options.speed ?? 1)
     const onError = options.onError ?? logError
     const loadOptions = { worker: options.worker ?? true, keyframeInterval }
+    // Loads while the recording is indexed, which takes longer.
+    const interactions = import('./interactions.ts')
+    interactions.catch(ignore)
     const stage = Stage.create(container)
     let player: ReplayPlayer
     if (isStream(source)) {
         const feed = new StreamFeed(source, loadOptions, onError)
         try {
-            player = new ReplayPlayer(await feed.timeline, await stage, speed, onError)
+            player = new ReplayPlayer(await feed.timeline, await stage, speed, onError, await interactions)
         } catch (error) {
             feed.stop()
             ;(await stage).destroy()
@@ -155,7 +161,8 @@ export async function createPlayer(
     } else {
         const sources = (isList(source) ? source : [source]).map(toSegment)
         try {
-            player = new ReplayPlayer(new Timeline(await loadIndex(sources, loadOptions)), await stage, speed, onError)
+            const timeline = new Timeline(await loadIndex(sources, loadOptions))
+            player = new ReplayPlayer(timeline, await stage, speed, onError, await interactions)
         } catch (error) {
             ;(await stage).destroy()
             throw error
@@ -241,6 +248,8 @@ class ReplayPlayer extends EventTarget implements Player {
     readonly #materializer: Materializer
     readonly #assets: Assets
     readonly #canvases = new Canvases()
+    readonly #links: LinkedSheets
+    readonly #interaction: Interaction
     readonly #document: Document
     readonly #onError: (error: unknown) => void
     readonly #start: number
@@ -273,7 +282,13 @@ class ReplayPlayer extends EventTarget implements Player {
     #eventParts = 0
     #destroyed = false
 
-    constructor(timeline: Timeline, stage: Stage, speed: number, onError: (error: unknown) => void) {
+    constructor(
+        timeline: Timeline,
+        stage: Stage,
+        speed: number,
+        onError: (error: unknown) => void,
+        interactions: typeof Interactions
+    ) {
         super()
         this.#timeline = timeline
         this.#stage = stage
@@ -282,7 +297,21 @@ class ReplayPlayer extends EventTarget implements Player {
         for (const statics of timeline.statics) {
             this.#assets.add(readEvents(statics))
         }
-        this.#materializer = new Materializer(this.#document, this.#assets, this.#canvases)
+        const pseudoClasses = new interactions.PseudoClasses()
+        this.#links = new interactions.LinkedSheets(pseudoClasses, () => {
+            // The states shown may need the rules it brought.
+            this.#interaction.invalidate()
+            if (!this.#playing) {
+                this.#update().catch(this.#onError)
+            }
+        })
+        this.#materializer = new Materializer(this.#document, {
+            assets: this.#assets,
+            canvases: this.#canvases,
+            pseudoClasses,
+            links: this.#links
+        })
+        this.#interaction = new interactions.Interaction(timeline, this.#materializer, this.#document, pseudoClasses)
         this.#onError = onError
         this.#start = timeline.start
         this.#end = Math.max(timeline.end, this.#start)
@@ -460,6 +489,7 @@ class ReplayPlayer extends EventTarget implements Player {
         this.#stage.destroy()
         this.#assets.revoke()
         this.#canvases.revoke()
+        this.#links.revoke()
         this.#snapshots.clear()
         this.#media?.destroy()
         this.onDestroy()
@@ -607,6 +637,7 @@ class ReplayPlayer extends EventTarget implements Player {
         }
         this.#advance(target)
         this.#flushScrolls()
+        this.#interaction.show(this.#time, pointerAt(timeline.pointer, this.#time))
         this.#showMedia()
         return undefined
     }

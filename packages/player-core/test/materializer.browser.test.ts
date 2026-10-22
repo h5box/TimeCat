@@ -14,6 +14,7 @@ import { Assets } from '../src/assets.ts'
 import { Canvases } from '../src/canvases.ts'
 import { isDocument, isFrame, isHtml, isInput, isSelect, isShadowRoot, isStyle, isTextArea } from '../src/dom.ts'
 import { Materializer, PLAYER_ATTRIBUTE } from '../src/materializer.ts'
+import type { MaterializerOptions } from '../src/materializer.ts'
 import { Stage } from '../src/stage.ts'
 import { VirtualDocument } from '../src/timeline/virtual.ts'
 import type { EncodedState } from '../src/timeline/virtual.ts'
@@ -37,17 +38,14 @@ afterEach(() => {
 })
 
 /** A materializer for the document of a new stage. */
-async function setUp(
-    assets?: Assets,
-    canvases?: Canvases
-): Promise<{ document: Document; materializer: Materializer }> {
+async function setUp(options: MaterializerOptions = {}): Promise<{ document: Document; materializer: Materializer }> {
     const container = document.createElement('div')
     container.style.cssText = 'width: 400px; height: 300px'
     document.body.append(container)
     containers.push(container)
     const stage = await Stage.create(container)
     stages.push(stage)
-    return { document: stage.document, materializer: new Materializer(stage.document, assets, canvases) }
+    return { document: stage.document, materializer: new Materializer(stage.document, options) }
 }
 
 /** Applies an event the way the player does. */
@@ -838,7 +836,7 @@ describe('Materializer', () => {
             { type: EventType.FontFace, family: 'Recorded', source: `url("${image}")`, descriptors: ['weight', '700'] },
             { type: EventType.FontFace, family: 'Bytes', source: new Uint8Array([0, 1, 2]), descriptors: [] }
         ])
-        const { document, materializer } = await setUp(assets)
+        const { document, materializer } = await setUp({ assets })
         // head 4: style 5 (text 6); body 7: img 8, iframe 9 (#document 10 (html 11 (body 12 (img 13))))
         materializer.build(
             pageOf(
@@ -867,7 +865,9 @@ describe('Materializer', () => {
         expect(local).toMatch(new RegExp(`^blob:${location.origin}/`))
         expect(nodeOf(materializer, 8, isImage).getAttribute('srcset')).toBe(`${local} 2x, other.png 3x`)
         expect(nodeOf(materializer, 13, isImage).getAttribute('src')).toBe(local)
-        expect(document.querySelector('style')?.textContent).toBe(`body { background: url(${local}) }`)
+        expect(document.querySelector(`style:not([${PLAYER_ATTRIBUTE}])`)?.textContent).toBe(
+            `body { background: url(${local}) }`
+        )
         // The first copy of a URL counts.
         const framedImage = nodeOf(materializer, 13, isImage)
         await framedImage.decode()
@@ -901,7 +901,7 @@ describe('Materializer', () => {
 
     it('shows canvases at the size of their bitmap, and what is drawn in them, in a document without scripts', async () => {
         const canvases = new Canvases()
-        const { materializer } = await setUp(undefined, canvases)
+        const { materializer } = await setUp({ canvases })
         // body 5: canvas 6, canvas 7, canvas 8
         materializer.build(
             pageOf([
@@ -979,6 +979,6 @@ describe('Materializer', () => {
         // Not in a browser that leaves the body's font alone.
         const plain = await setUp()
         plain.materializer.build(pageOf([]))
-        expect(plain.document.querySelector(`[${PLAYER_ATTRIBUTE}] style`)).toBeNull()
+        expect(plain.document.querySelector(`[${PLAYER_ATTRIBUTE}] style`)?.textContent).not.toContain('font')
     })
 })

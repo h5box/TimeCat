@@ -174,6 +174,8 @@ Segment := Header Chunk*
 | 16 | Custom | `Custom` | 业务自定义事件 |
 | 17 | MediaTrack | `Media` | 声明一个媒体轨道，或改变它的格式 |
 | 18 | MediaState | `Media` | `<audio>` / `<video>` 的播放状态 |
+| 19 | Focus | `Input` | 有焦点的元素 |
+| 20 | TopLayer | `Dom` | 顶层（top layer）显示的模态对话框和 popover |
 
 ### 6.3 节点 ID
 
@@ -380,6 +382,32 @@ codec 和 container 必须恰好有一个非空，否则是错误。
 | volume | `f64` | 音量，0 到 1 |
 
 元素在播放时，回放时刻 t 的位置是 `currentTime + (t − 事件时间) / 1000 × playbackRate`。
+
+### 6.23 Focus（19）
+
+焦点变化时写出（`focusin` / `focusout` 之后），快照之后也写一个，如果有元素有焦点。
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | `varuint` | 有焦点的元素，取最里面的一个：焦点在 shadow tree 或 frame 的文档里时，是那里的元素，不是宿主或 frame。0 表示没有 |
+| flags | `u8` | bit 0 = 元素匹配 `:focus-visible`，即浏览器显示了焦点（如键盘移过来的焦点）；其余位非 0 是错误 |
+
+回放端据此显示 `:focus`、`:focus-visible` 和 `:focus-within` 的样式。
+
+### 6.24 TopLayer（20）
+
+顶层显示的元素，从下到上：后面的显示在前面的之上。录制端在它们变化时写出整个列表，快照之后也写一个，如果不为空。
+
+`varuint` 个数，每项为 `varuint` 节点 ID、`u8` kind：
+
+| kind | 说明 |
+|---|---|
+| 1 模态 | 用 `showModal()` 打开的 `<dialog>` |
+| 2 popover | 显示中的 `popover` 元素 |
+
+其他 kind 是错误。录制端看不到顶层的顺序，只能按它看到元素进入的先后排；快照时已经显示的，按文档顺序，模态对话框在前。
+
+Focus 和 TopLayer 是状态：时刻 t 的状态是 t 之前最近的那个事件，但在最近的快照之前的不算，那时的节点 ID 可能已经指别的节点。
 
 ## 7. 媒体
 

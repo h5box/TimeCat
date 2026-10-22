@@ -1,7 +1,7 @@
 // What a replay has to reproduce of a page, as text, so that the recorded page and its replay compare line by
 // line: the tree with every attribute, shadow trees and the documents of frames included, the state of form
-// controls, the rules of style sheets, scroll offsets, the viewport, the base URLs and the rendering modes. Nodes
-// are checked by type, across realms: both documents live in frames.
+// controls, the focus and the top layer, the rules of style sheets, scroll offsets, the viewport, the base URLs and
+// the rendering modes. Nodes are checked by type, across realms: both documents live in frames.
 
 /** Elements the player adds to the replayed document. */
 const PLAYER_ATTRIBUTE = 'data-timecat-player'
@@ -13,6 +13,16 @@ const MATHML = 'http://www.w3.org/1998/Math/MathML'
  * builds from the recording. That document is compared instead.
  */
 const FRAME_SOURCES = new Set(['src', 'srcdoc', 'sandbox', 'csp'])
+/**
+ * The states the player shows with attributes, as no one interacts with the replay, and selects with them in the
+ * rules it rewrites. A state counts whether the element is in it or has the attribute; the pointer's are left out.
+ */
+const STATES = ['focus', 'focus-visible', 'focus-within'] as const
+const STATE_PREFIX = 'data-timecat-'
+const STATE_ATTRIBUTE = /^data-timecat-(?:focus-visible|focus-within|focus|hover|active)$/
+const REWRITTEN_STATE = /\[data-timecat-(focus-visible|focus-within|focus|hover|active)\]/g
+/** Where the top layer shows an element. */
+const TOP_LAYER = ['modal', 'popover-open'] as const
 
 /** The shadow root of a host, closed ones included, which `shadowRoot` leaves out. */
 export type ShadowRootOf = (host: Element) => ShadowRoot | null
@@ -90,7 +100,7 @@ function adopted(root: Node, indent: string): string[] {
 }
 
 function rulesOf(sheet: CSSStyleSheet): string[] {
-    return [...sheet.cssRules].map(rule => rule.cssText)
+    return [...sheet.cssRules].map(rule => rule.cssText.replaceAll(REWRITTEN_STATE, ':$1'))
 }
 
 function describeElement(element: Element): string {
@@ -98,7 +108,7 @@ function describeElement(element: Element): string {
     const prefix =
         namespace === HTML ? '' : namespace === SVG ? 'svg:' : namespace === MATHML ? 'math:' : `{${namespace}}`
     const attributes = [...element.attributes]
-        .filter(({ name }) => !(isFrame(element) && FRAME_SOURCES.has(name)))
+        .filter(({ name }) => !(isFrame(element) && FRAME_SOURCES.has(name)) && !STATE_ATTRIBUTE.test(name))
         .map(
             ({ name, namespaceURI, value }) =>
                 `${name}${namespaceURI === null ? '' : `{${namespaceURI}}`}=${JSON.stringify(value)}`
@@ -118,6 +128,13 @@ function describeElement(element: Element): string {
     }
     if (element.scrollLeft !== 0 || element.scrollTop !== 0) {
         state += ` (scrolled: ${offset(element.scrollLeft, element.scrollTop)})`
+    }
+    const states = [
+        ...STATES.filter(name => element.hasAttribute(STATE_PREFIX + name) || element.matches(`:${name}`)),
+        ...TOP_LAYER.filter(name => element.matches(`:${name}`))
+    ]
+    if (states.length > 0) {
+        state += ` (${states.join(', ')})`
     }
     return `<${prefix}${element.localName}${attributes.map(attribute => ` ${attribute}`).join('')}>${state}`
 }

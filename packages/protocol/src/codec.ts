@@ -21,7 +21,8 @@ import {
     PointerType,
     SheetChangeKind,
     SheetOwner,
-    SnapshotFlag
+    SnapshotFlag,
+    TopLayerKind
 } from './events.ts'
 import type {
     AdoptedStyleSheetsEvent,
@@ -30,6 +31,7 @@ import type {
     CustomDataEvent,
     DocumentNode,
     ElementNode,
+    FocusEvent,
     FontFaceEvent,
     InputChange,
     InputEvent,
@@ -48,6 +50,8 @@ import type {
     SnapshotEvent,
     StyleSheetEvent,
     TcrEvent,
+    TopLayerEntry,
+    TopLayerEvent,
     ViewportEvent
 } from './events.ts'
 import { ByteReader } from './reader.ts'
@@ -62,6 +66,9 @@ const FONT_DATA = 1
 // Media state flags.
 const MEDIA_PAUSED = 1
 const MEDIA_MUTED = 2
+
+// Focus flags.
+const FOCUS_VISIBLE = 1
 
 /**
  * Allocates implicit node ids while decoding. It carries over from event to event: a snapshot resets it, and
@@ -113,6 +120,10 @@ export function encodeEvent(event: TcrEvent): Uint8Array<ArrayBuffer> {
             return encodeMediaTrack(event)
         case EventType.MediaState:
             return encodeMediaState(event)
+        case EventType.Focus:
+            return encodeFocus(event)
+        case EventType.TopLayer:
+            return encodeTopLayer(event)
         default:
             throw new RangeError('unknown event type')
     }
@@ -353,6 +364,23 @@ export function encodeMediaState(event: Omit<MediaStateEvent, 'type'>): Uint8Arr
     return bytes.finish()
 }
 
+export function encodeFocus(event: Omit<FocusEvent, 'type'>): Uint8Array<ArrayBuffer> {
+    const bytes = new ByteWriter(16)
+    bytes.varuint(event.id)
+    bytes.u8(event.visible ? FOCUS_VISIBLE : 0)
+    return bytes.finish()
+}
+
+export function encodeTopLayer(event: Omit<TopLayerEvent, 'type'>): Uint8Array<ArrayBuffer> {
+    const bytes = new ByteWriter(16 + event.entries.length * 4)
+    bytes.varuint(event.entries.length)
+    for (const entry of event.entries) {
+        bytes.varuint(entry.id)
+        bytes.u8(entry.kind)
+    }
+    return bytes.finish()
+}
+
 /**
  * Decodes an event body. Returns `undefined` for event types this reader does not know, which callers skip.
  * Bytes after the known fields are ignored, so later versions can append fields.
@@ -531,6 +559,27 @@ export function decodeEvent(type: number, body: Uint8Array, ids: IdCounter): Tcr
                 playbackRate: r.f64(),
                 volume: r.f64()
             }
+        }
+        case EventType.Focus: {
+            const id = r.varuint()
+            const flags = r.u8()
+            if (flags & ~FOCUS_VISIBLE) {
+                throw new TcrDecodeError(`unknown focus flags 0x${flags.toString(16)}`)
+            }
+            return { type, id, visible: (flags & FOCUS_VISIBLE) !== 0 }
+        }
+        case EventType.TopLayer: {
+            const count = readCount(r, 2)
+            const entries: TopLayerEntry[] = []
+            for (let i = 0; i < count; i++) {
+                const id = r.varuint()
+                const kind = r.u8()
+                if (!isValueOf(TopLayerKind, kind)) {
+                    throw new TcrDecodeError(`unknown top layer kind ${kind}`)
+                }
+                entries.push({ id, kind })
+            }
+            return { type, entries }
         }
         default:
             return undefined

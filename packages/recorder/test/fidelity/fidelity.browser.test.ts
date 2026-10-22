@@ -129,6 +129,61 @@ function typeInto(control: HTMLInputElement | HTMLTextAreaElement, value: string
     control.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
+function isHtmlElement(node: Node): node is HTMLElement {
+    return isElement(node) && node.namespaceURI === 'http://www.w3.org/1999/xhtml'
+}
+
+function isDialog(node: Node): node is HTMLDialogElement {
+    return isHtmlElement(node) && node.localName === 'dialog'
+}
+
+function htmlById(document: Document | ShadowRoot, id: string): HTMLElement {
+    return byIdAs(document, id, isHtmlElement)
+}
+
+/** Sends a pointer event of the primary mouse to `element`, near its top left corner. */
+function pointAt(element: Element, type: 'pointermove' | 'pointerdown' | 'pointerup'): void {
+    const view = element.ownerDocument.defaultView!
+    const box = element.getBoundingClientRect()
+    const init = { clientX: box.left + 2, clientY: box.top + 2, isPrimary: true, pointerType: 'mouse', bubbles: true }
+    element.dispatchEvent(new view.PointerEvent(type, { ...init, composed: true }))
+}
+
+/** A style sheet with rules for states, which the recorded page links to. */
+const STATES_SHEET = new URL('fixtures/states.css', import.meta.url).href
+
+/** Waits until a `<link>` has the sheet its `href` points to. */
+async function sheetLoaded(link: HTMLLinkElement): Promise<void> {
+    if (link.sheet?.href !== link.href) {
+        await new Promise(resolve => link.addEventListener('load', resolve, { once: true }))
+    }
+}
+
+/** The elements whose colors rules for the pointer's states change, in `describePointerStates`. */
+const POINTER_TARGETS = ['a', 'b', 'inner', 'framed', 'frame'] as const
+
+/** The colors of the elements in `POINTER_TARGETS`. */
+function describePointerStates(document: Document): string {
+    const elements = [
+        byId(document, 'a'),
+        byId(document, 'b'),
+        byId(byId(document, 'host').shadowRoot!, 'inner'),
+        byId(contentOf(frameById(document, 'frame')), 'framed'),
+        frameById(document, 'frame')
+    ]
+    return elements
+        .map(element => `${element.id} ${element.ownerDocument.defaultView!.getComputedStyle(element).color}`)
+        .join('\n')
+}
+
+/**
+ * What `describePointerStates` says of a page the pointer makes elements show `colors` on, black otherwise. The
+ * recorded page does not show them, as synthetic events do not move the browser's pointer.
+ */
+function pointerStates(colors: Partial<Record<(typeof POINTER_TARGETS)[number], string>>): Describe {
+    return () => POINTER_TARGETS.map(id => `${id} ${colors[id] ?? 'rgb(0, 0, 0)'}`).join('\n')
+}
+
 const PAGE = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -382,6 +437,132 @@ describe('replay of a recording', () => {
         frameById(page, 'blank').remove()
         session.checkpoint()
         await expectReplay(session)
+    })
+
+    it('shows the element that has the focus, in shadow trees and frames too', async () => {
+        const session = await Session.open({
+            html:
+                '<!DOCTYPE html><body><input id="a"><button id="b">b</button><div id="host"></div>' +
+                '<iframe id="frame"></iframe></body>',
+            prepare: page => {
+                byId(page, 'host').attachShadow({ mode: 'open' }).innerHTML = '<p><input id="inner"></p>'
+                contentOf(frameById(page, 'frame')).body.innerHTML = '<p><input id="framed"></p>'
+            }
+        })
+        const page = session.document
+        const framed = contentOf(frameById(page, 'frame'))
+        session.checkpoint()
+        // Fields and buttons, which show the focus differently.
+        htmlById(page, 'a').focus()
+        session.checkpoint()
+        htmlById(page, 'b').focus()
+        session.checkpoint()
+        // In a shadow tree, which gives its host the focus too, and in a frame, which does not.
+        htmlById(byId(page, 'host').shadowRoot!, 'inner').focus()
+        session.checkpoint()
+        htmlById(framed, 'framed').focus()
+        session.checkpoint()
+        // The element focused removed, and the focus given up.
+        byId(framed, 'framed').remove()
+        session.checkpoint()
+        htmlById(page, 'a').focus()
+        session.flush()
+        htmlById(page, 'a').blur()
+        session.checkpoint()
+        expect(session.checkpoints[3]?.state).toContain('<div id="host"> (focus, focus-within)')
+        expect(session.checkpoints[4]?.state).toContain('<input id="framed"> (value: "") (focus, focus-visible')
+        await expectReplay(session)
+    })
+
+    it('shows the modal dialogs and popovers in the top layer', async () => {
+        const session = await Session.open({
+            html:
+                '<!DOCTYPE html><body><dialog id="modal"><button id="opener" popovertarget="menu">menu</button>' +
+                '<div id="menu" popover>menu</div></dialog><dialog id="plain">plain</dialog>' +
+                '<div id="tip" popover="manual">tip</div></body>',
+            // A popover shown before recording starts.
+            prepare: page => htmlById(page, 'tip').showPopover()
+        })
+        const page = session.document
+        const modal = byIdAs(page, 'modal', isDialog)
+        const menu = htmlById(page, 'menu')
+        session.checkpoint()
+        // A modal dialog, which takes the focus, a popover shown from it, and a dialog that is not modal.
+        modal.showModal()
+        session.checkpoint()
+        menu.showPopover()
+        session.checkpoint()
+        // Showing a dialog hides popovers, and moves the focus.
+        byIdAs(page, 'plain', isDialog).show()
+        session.checkpoint()
+        menu.hidePopover()
+        modal.close()
+        session.checkpoint()
+        htmlById(page, 'tip').hidePopover()
+        session.checkpoint()
+        expect(session.checkpoints[2]?.state).toContain('<dialog id="modal" open=""> (focus-within, modal)')
+        expect(session.checkpoints[2]?.state).toContain('<div id="menu" popover=""> (popover-open)')
+        await expectReplay(session)
+    })
+
+    it('shows what the pointer is over and what it pressed, in shadow trees and frames too', async () => {
+        const session = await Session.open({
+            html:
+                '<!DOCTYPE html><head><style>#a:hover { color: rgb(255, 0, 0); } #b:active { color: rgb(0, 0, 255); }' +
+                ' #frame:hover { color: rgb(1, 2, 3); }</style></head><body><div id="a">a <b id="b">b</b></div>' +
+                '<div id="host"></div><iframe id="frame" style="border: 3px solid; padding: 5px"></iframe>' +
+                '<p id="away">away</p></body>',
+            prepare: page => {
+                byId(page, 'host').attachShadow({ mode: 'open' }).innerHTML =
+                    '<style>p:hover { color: rgb(0, 128, 0); }</style><p id="inner">inner</p>'
+                contentOf(frameById(page, 'frame')).body.innerHTML =
+                    '<style>p:hover { color: rgb(128, 0, 128); }</style><p id="framed">framed</p>'
+            }
+        })
+        const page = session.document
+        const b = byId(page, 'b')
+        pointAt(byId(page, 'a'), 'pointermove')
+        await session.checkpointAs(pointerStates({ a: 'rgb(255, 0, 0)', b: 'rgb(255, 0, 0)' }))
+        pointAt(b, 'pointermove')
+        pointAt(b, 'pointerdown')
+        await session.checkpointAs(pointerStates({ a: 'rgb(255, 0, 0)', b: 'rgb(0, 0, 255)' }))
+        pointAt(b, 'pointerup')
+        pointAt(byId(byId(page, 'host').shadowRoot!, 'inner'), 'pointermove')
+        await session.checkpointAs(pointerStates({ inner: 'rgb(0, 128, 0)' }))
+        // The frame is under the pointer too, as its document sees.
+        pointAt(byId(contentOf(frameById(page, 'frame')), 'framed'), 'pointermove')
+        await session.checkpointAs(pointerStates({ framed: 'rgb(128, 0, 128)', frame: 'rgb(1, 2, 3)' }))
+        pointAt(byId(page, 'away'), 'pointermove')
+        await session.checkpointAs(pointerStates({}))
+        await expectReplay(session, { describeState: describePointerStates })
+    })
+
+    it('shows the states the rules of linked style sheets select, which the player loads again', async () => {
+        const session = await Session.open({
+            html:
+                `<!DOCTYPE html><head><link rel="stylesheet" href="${STATES_SHEET}"></head><body>` +
+                '<p id="linked">linked</p><p id="away">away</p></body>'
+        })
+        const page = session.document
+        await sheetLoaded(page.querySelector('link')!)
+        pointAt(byId(page, 'linked'), 'pointermove')
+        await session.checkpointAs(() => 'linked rgb(255, 0, 0)')
+        pointAt(byId(page, 'away'), 'pointermove')
+        await session.checkpointAs(() => 'linked rgb(0, 0, 0)')
+        await expectReplay(session, {
+            describeState: async document => {
+                // The player swaps in the sheet it rewrote once it is loaded.
+                const link = document.querySelector('link')!
+                for (let tries = 0; tries < 100 && !link.href.startsWith('blob:'); tries++) {
+                    // oxlint-disable-next-line no-await-in-loop -- waits for the player
+                    await frames(1)
+                }
+                await sheetLoaded(link)
+                await frames(2)
+                const element = byId(document, 'linked')
+                return `linked ${element.ownerDocument.defaultView!.getComputedStyle(element).color}`
+            }
+        })
     })
 
     it('shows the rules script changed, in `<style>` elements and in sheets that documents adopt', async () => {

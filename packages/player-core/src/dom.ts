@@ -74,6 +74,14 @@ export function isStyle(element: Element): element is HTMLStyleElement | SVGStyl
     )
 }
 
+export function isLink(element: Element): element is HTMLLinkElement {
+    return isHtml(element, 'link')
+}
+
+export function isDialog(element: Element): element is HTMLDialogElement {
+    return isHtml(element, 'dialog')
+}
+
 export function isCanvas(element: Element): element is HTMLCanvasElement {
     return isHtml(element, 'canvas')
 }

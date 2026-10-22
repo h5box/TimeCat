@@ -108,6 +108,10 @@ export function isFormControl(node: Node): node is FormControl {
     return isInput(node) || isTextArea(node) || isSelect(node)
 }
 
+export function isDialog(node: Node): node is HTMLDialogElement {
+    return isHtml(node, 'dialog')
+}
+
 export function isForm(node: Node): node is HTMLFormElement {
     return isHtml(node, 'form')
 }
@@ -139,4 +143,13 @@ export function isStyle(node: Node): node is HTMLStyleElement | SVGStyleElement 
     }
     const namespace = node.namespaceURI
     return namespace === HTML_NAMESPACE || namespace === SVG_NAMESPACE
+}
+
+/** Whether `element` matches `selector`: false for one this browser does not know, as old ones `:popover-open`. */
+export function matches(element: Element, selector: string): boolean {
+    try {
+        return element.matches(selector)
+    } catch {
+        return false
+    }
 }

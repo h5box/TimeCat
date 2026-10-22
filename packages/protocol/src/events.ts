@@ -38,7 +38,11 @@ export const EventType = {
     /** Declares a media track, or changes its format from here on. Track `Media`. */
     MediaTrack: 17,
     /** Playback state of an audio or video element. Track `Media`. */
-    MediaState: 18
+    MediaState: 18,
+    /** The element that has focus. Track `Input`. */
+    Focus: 19,
+    /** The modal dialogs and popovers the top layer shows. Track `Dom`. */
+    TopLayer: 20
 } as const
 
 export type EventType = (typeof EventType)[keyof typeof EventType]
@@ -426,6 +430,38 @@ export interface MediaStateEvent {
     volume: number
 }
 
+export interface FocusEvent {
+    type: typeof EventType.Focus
+    /**
+     * The element that has focus, the innermost one: in a shadow tree or a frame's document, not its host or the
+     * frame. 0 when none has.
+     */
+    id: number
+    /** It matches `:focus-visible`: the browser shows the focus, as it does once the keyboard moved it. */
+    visible: boolean
+}
+
+/** How an element got into the top layer. */
+export const TopLayerKind = {
+    /** A `<dialog>` shown with `showModal()`. */
+    Modal: 1,
+    /** An element with the `popover` attribute, shown. */
+    Popover: 2
+} as const
+
+export type TopLayerKind = (typeof TopLayerKind)[keyof typeof TopLayerKind]
+
+export interface TopLayerEntry {
+    id: number
+    kind: TopLayerKind
+}
+
+export interface TopLayerEvent {
+    type: typeof EventType.TopLayer
+    /** From the bottom up: each shows above those before it. */
+    entries: TopLayerEntry[]
+}
+
 export type TcrEvent =
     | SnapshotEvent
     | MutationsEvent
@@ -445,3 +481,5 @@ export type TcrEvent =
     | CustomDataEvent
     | MediaTrackEvent
     | MediaStateEvent
+    | FocusEvent
+    | TopLayerEvent

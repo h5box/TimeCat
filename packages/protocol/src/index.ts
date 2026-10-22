@@ -5,6 +5,7 @@ export {
     encodeConsole,
     encodeCustom,
     encodeEvent,
+    encodeFocus,
     encodeFontFace,
     encodeInput,
     encodeMediaState,
@@ -18,6 +19,7 @@ export {
     encodeScroll,
     encodeSnapshot,
     encodeStyleSheet,
+    encodeTopLayer,
     encodeViewport
 } from './codec.ts'
 export type { IdCounter } from './codec.ts'
@@ -49,7 +51,8 @@ export {
     PointerType,
     SheetChangeKind,
     SheetOwner,
-    SnapshotFlag
+    SnapshotFlag,
+    TopLayerKind
 } from './events.ts'
 export type {
     AddedRun,
@@ -62,6 +65,7 @@ export type {
     DoctypeNode,
     DocumentNode,
     ElementNode,
+    FocusEvent,
     FontFaceEvent,
     InputChange,
     InputEvent,
@@ -83,6 +87,8 @@ export type {
     TcrEvent,
     TextChange,
     TextNode,
+    TopLayerEntry,
+    TopLayerEvent,
     ViewportEvent
 } from './events.ts'
 export { readEventFrames, writeEventFrame } from './frames.ts'

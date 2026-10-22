@@ -16,6 +16,7 @@ import {
     SheetChangeKind,
     SheetOwner,
     TcrDecodeError,
+    TopLayerKind,
     Track,
     decodeEvent,
     encodeEvent,
@@ -388,6 +389,13 @@ const otherEvents: fc.Arbitrary<TcrEvent> = fc.oneof(
         currentTime: fc.double({ min: 0, noNaN: true }),
         playbackRate: fc.double(),
         volume: fc.double({ min: 0, max: 1, noNaN: true })
+    }),
+    fc.record({ type: fc.constant(EventType.Focus), id: fc.oneof(fc.constant(0), smallId), visible: fc.boolean() }),
+    fc.record({
+        type: fc.constant(EventType.TopLayer),
+        entries: fc.array(fc.record({ id: smallId, kind: fc.constantFrom(TopLayerKind.Modal, TopLayerKind.Popover) }), {
+            maxLength: 5
+        })
     })
 )
 
@@ -803,6 +811,17 @@ describe('decoding untrusted bodies', () => {
         expect(body[1]).toBe(3)
         body[1] = 4
         expect(decodeOutcome(EventType.MediaState, body)).toBe('TcrDecodeError')
+    })
+
+    it('rejects unknown focus flags and top layer kinds', () => {
+        const focus = encodeEvent({ type: EventType.Focus, id: 4, visible: true })
+        expect(focus[1]).toBe(1)
+        focus[1] = 2
+        expect(decodeOutcome(EventType.Focus, focus)).toBe('TcrDecodeError')
+        const layer = encodeEvent({ type: EventType.TopLayer, entries: [{ id: 4, kind: TopLayerKind.Popover }] })
+        expect(layer[2]).toBe(2)
+        layer[2] = 3
+        expect(decodeOutcome(EventType.TopLayer, layer)).toBe('TcrDecodeError')
     })
 
     it('skips unknown event types', () => {

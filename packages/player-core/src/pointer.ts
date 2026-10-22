@@ -19,8 +19,10 @@ export interface PointerState {
     y: number
     /** `PointerType`. */
     type: number
-    /** A button is down: for touch, whether the finger is on the screen. */
-    pressed: boolean
+    /**
+     * Where the button that is down went down, while one is: for touch, while the finger is on the screen.
+     */
+    press: { x: number; y: number } | undefined
     /** Recent presses, the latest first. */
     clicks: Click[]
 }
@@ -47,7 +49,7 @@ export function pointerAt(trail: PointerTrail, time: number): PointerState | und
         x: trail.xs[sample]!,
         y: trail.ys[sample]!,
         type: trail.pointers[sample]!,
-        pressed: last >= 0 && actions[last] === PointerAction.Down,
+        press: last >= 0 && actions[last] === PointerAction.Down ? { x: xs[last]!, y: ys[last]! } : undefined,
         clicks
     }
 }
